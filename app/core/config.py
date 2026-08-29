@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     kakao_client_id: str | None = None
     kakao_client_secret: str | None = None
     sentry_dsn: str | None = None
+    sentry_traces_sample_rate: float = 0.1
+    environment: str = "local"
+
+    log_level: str = "INFO"
+    # 운영에서는 JSON 한 줄, 로컬에서는 사람이 읽는 출력.
+    log_json: bool = False
+
+    # 하루(24시간 슬라이딩 윈도우) 사용자별 LLM 작업 한도.
+    daily_upload_limit: int = 5
+    daily_diagnosis_limit: int = 5
+    daily_roadmap_limit: int = 10
+    daily_recommendation_limit: int = 20
+    daily_chat_message_limit: int = 100
+
+    # processing 상태로 이 시간을 넘긴 job은 프로세스가 죽은 것으로 보고 실패 처리한다.
+    stale_job_timeout_minutes: int = 30
 
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"

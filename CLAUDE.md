@@ -4,10 +4,19 @@
 
 ## 프로젝트 개요
 
-세특연구소는 학생부(생활기록부) 기반 AI 진단 및 후속 탐구 추천 서비스입니다.
-- 사용자가 생기부를 업로드하거나 정보를 입력하면 AI가 학생부를 하나의 서사로 요약하고 강점/약점을 진단
-- 이전 활동(보고서/발표 등)을 기반으로 "다음 단계" 탐구 주제를 추천 (범용 LLM과의 차별점)
-- 웹(Next.js)과 별도 모바일 앱이 동일한 백엔드 API를 공유
+세특연구소는 **고등학생이 3년에 걸친 세특 활동을 기록·정리하고 다음 단계를 계획하는 플랫폼**입니다.
+고등학생의 활동은 양이 많고 서로 유기적으로 이어지지만, 그 연결을 스스로 관리하며 다음 계획을 세우기는 어렵습니다. 이 플랫폼이 그 일을 대신합니다.
+
+목적은 두 축입니다.
+
+1. **현재를 기록한다** — 회원가입 후 생기부 업로드 또는 온보딩 질문으로 출발하고, 이후 활동·성적·수행평가·독서가 생길 때마다 각 탭이나 챗봇으로 쌓습니다. "진단"이 현재 상태를 서사로 정리하고 강점/약점·학기별 흐름·활동의 유기적 연결을 분석합니다.
+2. **미래를 계획한다** — 세특의 핵심은 활동이 학년이 오를수록 **고도화**되어 하나의 성장 이야기가 되는 것입니다. AI가 학기별 로드맵과 후속 탐구를 제안하고, 계획은 완료되면 실제 기록으로 승격되며 계보가 남습니다.
+
+**"계획 → 실행 → 기록 → 다음 계획" 루프와 활동 계보가 범용 LLM과의 차별점**입니다. 새 기능을 설계할 때 이 루프를 끊지 않는지 먼저 확인하세요.
+
+탭 구성: 성적 / 독서 / 활동 / 수상 / 봉사 / 출결 / 계획 / **챗봇**. 챗봇 탭에는 **'수정' 토글**이 있습니다 — 켜면 대화만으로 독서 추가, 활동 수정, 개인화 메모리 갱신, 진단 실행 등이 실제로 일어나고, 끄면 개인화된 세특 메모리를 근거로 답만 합니다. 챗봇은 완벽히 개인화되어야 합니다.
+
+웹(Next.js)과 별도 모바일 앱이 동일한 백엔드 API를 공유합니다.
 
 ## 기술 스택
 
@@ -34,15 +43,25 @@ app/
   db/             # session, base, alembic 연동
   models/         # SQLAlchemy 모델 (도메인별 파일 분리)
   schemas/        # Pydantic 스키마 (요청/응답, LLM 구조화 출력과 재사용)
-  api/v1/         # 라우터: auth, seteuk, profile, diagnosis, conversations, activities, recommendations
-  services/       # llm_service, parser_service, diagnosis_service, recommendation_service, chat_service
+  api/v1/         # auth, seteuk, profile, diagnosis, records(6개 탭 팩토리), plans, recommendations, conversations
+  services/
+    llm.py            # DeepSeek 공용 진입점 (call_structured / stream_chat)
+    parser/           # 생기부 하이브리드 파서
+    diagnosis/        # 3단계 진단 파이프라인
+    chat/             # 챗봇 컨텍스트 조립 · 수정모드 도구 · 프롬프트
+    record_service.py # 6개 탭 공통 CRUD
+    plan_service.py   # 계획 CRUD · 완료 승격 · AI 로드맵
+    activity_lineage_service.py
+    recommendation_service.py
+    chat_service.py   # 대화 + SSE 스트리밍
 alembic/
+scripts/start.sh  # 컨테이너 진입점 (alembic upgrade → uvicorn)
 tests/
   unit/
   integration/
 docs/
-  API_SPEC.md     # 전체 API 명세서 (별도 제공)
-  PARSER_SPEC.md  # 생기부 파서 API 설명
+  API_SPEC.md     # 전체 API 명세서 — 구현과 일치, 코드가 바뀌면 함께 갱신
+  PARSER_SPEC.md  # 생기부 파서 설명 (실제 구현은 이 스펙에서 상당히 벗어남 — Phase 1 메모 참조)
 ```
 
 ## 개발 원칙
@@ -53,33 +72,47 @@ docs/
 - **DB 마이그레이션은 항상 Alembic으로.** 모델을 직접 수정한 뒤 `alembic revision --autogenerate`로 생성하고 diff를 검토한다.
 - **세특 문단은 단일 활동으로 뭉치지 않는다.** 파서가 한 문단에서 여러 개별 활동(`activity_type`별)을 추출하도록 구현 — 기능2(후속 추천) 품질에 직접 영향을 준다.
 - **날짜는 항상 ISO 8601로 정규화**하고, 원문이 필요하면 `raw_date` 필드에 별도 보존한다.
-- 커밋 전 `ruff check .`, `pytest` 통과 확인.
+- **활동 계보를 끊지 않는다.** 활동을 만드는 모든 경로(탭 직접 입력, 계획 완료 승격, 챗봇 도구)는 이어지는 이전 활동이 있으면 `parent_activity_id`를 채워야 한다. 계획은 `source_activity_id`로 사슬에 매달린다.
+- **계획과 기록을 한 테이블에 섞지 않는다.** 미래는 `plan_items`, 과거는 각 도메인 테이블. 완료 처리가 둘을 잇는 유일한 통로다.
+- **챗봇 수정 모드에 삭제 도구를 추가하지 않는다.** 대화 중 오해로 3년치 기록이 사라지는 사고를 막기 위한 의도적 제약이며, 삭제는 탭의 DELETE로만 한다.
+- **스트리밍 응답은 자체 DB 세션을 연다.** StreamingResponse 본문은 요청 의존성보다 오래 살기 때문에, 라우터가 쥔 세션을 제너레이터에서 쓰면 안 된다(비동기 job과 같은 패턴: `AsyncSessionLocal`).
+- **비용이 드는 LLM 엔드포인트에는 `enforce_daily_limit`를 건다.** 카운터는 `usage_events` 테이블에 있어 워커 수·재시작과 무관하다.
+- 커밋 전 `ruff check .`, `pytest`, `alembic check`(모델과 마이그레이션 일치) 통과 확인.
 
 ## 참고 문서
 
 - **API 명세서**: `docs/API_SPEC.md` — 전체 엔드포인트, 요청/응답 스키마, 데이터 모델 정의. 새 엔드포인트를 만들 때 이 문서와 일치하는지 먼저 확인할 것.
 - **개발 로드맵**: Phase 0(기반구축) → 1(생기부 파서) → 2(진단) → 3(챗봇) → 4(탭 관리) → 5(후속 추천) → 6(모니터링). 순서대로 구현하며, 이전 Phase의 스키마를 깨지 않도록 주의.
 
-## 환경 변수 (`.env.example` 참고)
+## 환경 변수
 
-```
-DATABASE_URL=
-JWT_SECRET=
-JWT_ALGORITHM=HS256
-ANTHROPIC_API_KEY=
-KAKAO_CLIENT_ID=
-KAKAO_CLIENT_SECRET=
-SENTRY_DSN=
-```
+전체 목록과 설명은 `.env.example`에 있습니다. 핵심만:
+
+- `DATABASE_URL`, `JWT_SECRET` — 필수
+- `DEEPSEEK_API_KEY` — 파서·진단·로드맵·추천·챗봇이 **모두** DeepSeek을 씁니다(사용자 결정). Anthropic 키는 쓰지 않습니다.
+- `DAILY_*_LIMIT` — 사용자별 24시간 LLM 작업 한도
+- `LOG_JSON`, `LOG_LEVEL`, `SENTRY_DSN`, `ENVIRONMENT` — 운영 로깅
+- `STALE_JOB_TIMEOUT_MINUTES` — 기동 시 좀비 job 판정 기준
 
 ## 현재 작업 중인 Phase
 
 (여기에 현재 진행 중인 Phase와 완료된 작업을 최신 상태로 업데이트해서 사용하세요. AI 에이전트가 세션마다 참고합니다.)
 
-- [x] Phase 0: 기반 구축 — FastAPI 스캐폴딩, docker-compose(PostgreSQL), SQLAlchemy(async)+Alembic, JWT 인증(회원가입/로그인/토큰 재발급/로그아웃), CI(GitHub Actions, 린트+테스트만) 완료. 카카오 소셜 로그인·배포 파이프라인·Sentry 실연동은 아직
+- [x] Phase 0: 기반 구축 — FastAPI 스캐폴딩, docker-compose(PostgreSQL), SQLAlchemy(async)+Alembic, JWT 인증(회원가입/로그인/토큰 재발급/로그아웃), CI(GitHub Actions) 완료. 카카오 로그인·로그아웃 무효화·Sentry·배포 설정은 아래 'Phase 0 잔여'/'Phase 6'에서 마저 채움
 - [x] Phase 1: 생기부 파서 — Rule-based(출결/성적/수상/봉사/독서/진로희망) + LLM(DeepSeek, 세특/창체/행발) 하이브리드 파서, `POST /seteuk/uploads` 구현. **실제 DeepSeek API 키로 end-to-end 검증 완료** — 실 샘플 PDF 업로드 시 attendance 3, academic_performance 57, reading_activities 30, awards 43, volunteer_records 23, activities 152~162건 정상 생성 및 DB 적재 확인(LLM 응답이 매번 살짝 달라 activities 건수는 실행마다 소폭 변동). 이 과정에서 DeepSeek이 프롬프트가 지정한 enum 밖의 `activity_type`(예: "lecture")을 가끔 반환하는 것을 발견해 알 수 없는 값은 블록 전체를 버리는 대신 `other`로 대체하도록 수정(`schemas/seteuk.py`의 `field_validator`). **API_SPEC.md에서 확정 변경**: 확인/적용 2단계 플로우를 없애고 업로드 하나로 파싱+DB 반영까지 자동 수행하도록 단순화(`apply-to-profile` 엔드포인트 삭제, PDF 원본은 파싱에만 쓰고 디스크에 저장하지 않음 — `seteuk_uploads.file_id` 컬럼도 제거). `GET .../uploads/{id}`(상태, done=파싱+DB반영 완료) → `GET .../result`(결과 조회)만 남음. **재업로드 시 데이터 처리**: 6개 도메인 테이블 모두 `source_upload_id`(nullable FK) 보유 — 생기부 업로드로 생성된 행만 이 값이 채워지고, 재업로드 시 같은 사용자의 `source_upload_id`가 채워진 기존 행만 삭제 후 교체됨(수동 입력 데이터는 유지). **PARSER_SPEC.md 설계와 실제 생기부 포맷이 상당히 달라** 사용자가 제공한 실제 샘플(`tmp.pdf`, 개인정보 포함·git 제외)과 참고용 프로토타입 코드(검토 후 삭제됨)로 규칙기반 파서를 재검증·재작성함: 출결/진로희망/창체/행특은 스펙이 가정한 "[N학년] 라벨 텍스트"가 아니라 pdfplumber로 깨끗이 잡히는 표였고, 교과성적은 표 셀에 과목명이 줄바꿈으로 뭉쳐 있어 표 대신 PyMuPDF 선형 텍스트에서 "단위수/점수/석차" 패턴으로 역추적하는 방식으로 전환함. 실 문서 대조 중 pdfplumber bytes 버그, 섹션 헤더 자간공백 미대응, 수상 등급 forward-fill 오적용, 날짜 별칭 누락, 봉사기록이 무관한 표에서 오염되는 문제, 셀 줄바꿈이 텍스트에 그대로 노출되는 문제 등을 다수 발견·수정함. **알려진 한계**: (1) 교과성적은 한 셀에 여러 과목이 줄바꿈으로 압축된 행은 안전하게 스킵함(오귀속 방지 목적, 완전 수집률 아님), (2) 과목명/문장 줄바꿈 병합 시 "운 용"처럼 공백이 낀 경우 있음(인식엔 지장 없음, 완벽 복원은 아님), (3) `parsing_confidence`는 사용자 결정에 따라 항상 null, (4) 검증은 실제 샘플 1건 기준이라 다른 학교/연도 포맷에서는 재조정 필요할 수 있음
-- [ ] Phase 2: 기능1 — 진단
-- [ ] Phase 3: AI 챗봇
-- [ ] Phase 4: 탭 관리
-- [ ] Phase 5: 기능2 — 후속 추천
-- [ ] Phase 6: 모니터링
+- [x] Phase 2: 기능1 — 진단 — 긴 요구사항 논의를 거쳐 API_SPEC.md의 원래 설계(단일 LLM 호출 → `student_profiles` 스냅샷 → `diagnoses` 1행)를 완전히 새로 설계함. **데이터를 두 트랙으로 분리**: 생기부발(공식 기록, 학년-학기 단위, `source_upload_id`)과 사용자 답변(`student_interests` — `field_key`/`value`/`answered_at` 이력 로그, 7일 이내 재수정은 `answered_at` 유지하고 덮어씀; `field_key`는 온보딩 고정 키 + 향후 챗봇이 대화에서 추출하는 자유 키 모두 허용). `users.name`/`current_grade`/`current_semester`는 이력 불필요한 사실이라 별도 컬럼. **온보딩 흐름**: `POST /profile`(최초 필수 입력) → 생기부 업로드는 별개(스킵 가능) → 진단 실행 시 **최초 1회만** `GET /diagnosis/pre-questions`(생기부+답변 갭 분석, 최대 5개, 선택지+직접입력, 스킵 가능) → `POST /diagnosis/pre-questions/answers`(챗봇 대화처럼 취급해 LLM 추출 파이프라인을 거쳐 durable한 것만 `student_interests`에 반영) → `POST /diagnosis`(재진단부턴 사전질문 생략). **진단은 3단계 LLM 파이프라인**(파서와 동일 DeepSeek, 비동기 job): 1단계 학기별 병렬 분석(`semester_summaries`) + 2단계 분야별(성적/활동/수상/봉사/독서) 병렬 분석(`domain_feedback`)을 함께 실행 → 3단계는 원본 데이터가 아니라 1·2단계 결과만 입력받아 종합(`career_thread` — 과거 completed + 미래 suggested가 학년-학기 순으로 하나로 이어진 진로 스토리, `overall_summary`, `strengths`/`weaknesses`, `career_gap_analysis`, `keyword_map`). 파서의 "블록 실패 시 재시도 없음" 예외와 달리 CLAUDE.md 일반 원칙대로 각 LLM 호출 재시도 3회 후 실패 시 `LLM_UNAVAILABLE`. **실제 DeepSeek API 키로 end-to-end 검증 완료** — 생기부 없이 `student_interests`만으로도 진단이 정상 작동하며(정의상 요구사항), 사전질문 답변(예: "주말 2시간 가능", "AI 동아리 활동 중")이 자동 추출되어 `career_thread`에 구체적으로 반영되는 것까지 확인함. **알려진 한계**: (1) `career_gap_analysis`/`career_thread`의 "대학 진로 수업 방향" 제안은 실제 학과 커리큘럼 DB 없이 LLM 일반 지식에 의존, (2) Phase 3 챗봇의 `<수정>` 모드·자유 `field_key` 추출은 인프라(`student_interest_service.upsert_interest`)만 준비되고 실제 대화 흐름은 미구현
+- [x] Phase 4(선행 구현): 탭 관리 — 6개 리소스(출결/성적/독서/수상/봉사/활동)의 CRUD를 `build_record_router` 팩토리 하나로 찍어내고 로직은 `record_service`에 모음(소유권은 예외 없이 `user_id`로 먼저 좁힘, 공통 `limit`/`offset`/`{items,total}`). 응답의 `source_upload_id`로 생기부발/직접입력을 구분하고, 생성 요청으로는 이 값을 지정할 수 없게 해 재업로드 삭제 규칙을 우회할 수 없도록 함. **챗봇의 수정 도구가 이 서비스들을 그대로 호출하므로 Phase 3보다 먼저 구현함.** `ActivityCategory`에 학생 직접 입력용 `수행평가`/`교외활동`/`기타` 추가. 새 데이터: `plan_items`(미래 계획 — item_type/target_grade/target_semester/status/origin, 완료 시 활동·독서 행으로 승격), `activities.parent_activity_id`(계보). `GET /activities/{id}/lineage`는 어느 노드로 물어도 뿌리까지 올라가 과거 활동 + 미래 계획을 한 사슬로 돌려줌. `POST /plans/roadmap`은 진단·활동·기존 계획을 근거로 남은 학기의 로드맵을 만들되, **재생성 시 지우는 것은 대상 구간의 손대지 않은 AI 계획뿐**이고 사용자가 세웠거나 진행 중인 계획은 유지함. LLM이 지어낸 `source_activity_id`는 실제 보유 활동 집합과 대조해 버림
+- [x] Phase 5: 기능2 — 후속 추천 — `POST /recommendations/follow-up`. 진단과 달리 LLM 호출이 1회라 동기 처리. **프롬프트에 대상 활동 하나가 아니라 그 활동의 계보 사슬 전체와 최신 진단을 함께 넣음** — "무관한 새 주제"가 아니라 "남은 한계를 파고들거나 방법론을 정교화하거나 범위를 확장한" 제안이어야 하기 때문. 선택지 3개는 난이도·접근이 서로 달라야 하고 최소 하나는 남은 학기 안에 끝낼 수 있어야 함. `POST /recommendations/{id}/adopt`가 선택지를 계획으로 담아 추천→계획→실행→기록 루프를 닫음(계획이 출처 활동을 물려받아 완료 시 그 자식으로 기록됨)
+- [x] Phase 3: AI 챗봇 — `POST /conversations/{id}/messages`가 SSE(`token`/`action`/`done`/`error`)로 응답. **API_SPEC의 `edit_proposal` → confirm-edit 2단계 플로우를 없앰** — 사용자가 '수정' 토글을 켠 것 자체가 동의이므로 도구를 즉시 실행하고 결과를 `action` 이벤트와 메시지의 `applied_actions`로 되짚어 보여줌(`/confirm-edit` 엔드포인트 삭제). 대신 **삭제 도구를 일부러 넣지 않아** 대화만으로는 기록이 사라지지 않음. 도구 13종은 전부 기존 서비스 함수를 호출하고, 실패해도 예외를 올리지 않고 `{"error": …}`를 돌려줘 챗봇이 이유를 설명하게 함. 개인화 재료는 매 요청 `chat/context.py`가 조립(기본정보 + `student_interests` 메모리 + 최신 진단 + 6개 도메인 기록 + 진행 중 계획 + 직전 20개 메시지), 영역별 상한에 걸려 잘리면 `counts`로 전체 개수를 함께 넘겨 챗봇이 "없다"고 단정하지 않게 함. **스트리밍 제너레이터는 자체 세션(`AsyncSessionLocal`)을 연다** — StreamingResponse 본문이 요청 의존성보다 오래 살기 때문. 도구 호출 루프는 최대 4라운드, 인자가 여러 청크로 쪼개져 오는 것을 index별로 합침
+- [x] Phase 0 잔여: 카카오 소셜 로그인(`POST /auth/social/kakao` — 클라이언트가 받아온 access token을 카카오 API로 검증, 같은 이메일 계정이 있으면 연결, 이메일 미동의도 가입 가능), **실제 로그아웃**(`refresh_tokens` 테이블 + JWT `jti` — 로그아웃이 해당 토큰만 무효화하고 다른 기기 세션은 유지, 멱등)
+- [x] Phase 6: 모니터링 — structlog(운영 JSON/로컬 콘솔, contextvars로 request_id 자동 전파) + `RequestContextMiddleware`(X-Request-ID 이어받기, 처리시간 로깅) + Sentry(`send_default_pii=False` — 생기부는 민감정보) + 공통 에러 핸들러(검증 오류도 `{error_code, message}`로 통일). Rate limiting은 인메모리가 아니라 `usage_events` 테이블 기반 24시간 슬라이딩 윈도우라 워커 수·재시작과 무관. `/health`(프로세스)와 `/health/ready`(DB 포함) 분리. **좀비 job 정리**: 파싱·진단은 BackgroundTasks라 프로세스가 죽으면 `processing`에 영영 멈추므로, 기동 시 `STALE_JOB_TIMEOUT_MINUTES`를 넘긴 행을 실패로 확정해 사용자가 재시도할 수 있게 함. CI에 `alembic upgrade head` + `alembic check`(모델↔마이그레이션 일치) 추가
+
+- [x] **실제 DeepSeek 키로 Phase 3~6 end-to-end 검증 완료** — 별도 DB(`seteuk_e2e`)에 3년 서사(뉴스 스크랩 발표 → 지수함수 모델 → 로지스틱 보정)를 시딩하고 사전질문 → 진단 → 로드맵 → 후속추천 → 담기 → 완료 승격 → 계보 → 챗봇(일반/수정) 전 구간을 실제로 태움. 진단이 "지수함수의 한계를 느껴 로지스틱으로 넘어갔다"는 사슬을 정확히 읽어냈고, 로드맵 9개 항목 중 5개가 실제 활동 id에 계보 연결됨(LLM이 지어낸 id는 필터가 걸러냄), 챗봇이 수정 모드에서 `parent_activity_id`를 스스로 올바르게 골라 넣는 것까지 확인. **모킹 테스트가 전부 통과한 상태에서 실 호출로만 잡힌 문제 4건**: (1) `parent_activity_id`(UUID)를 추가한 뒤 `serialize_row`가 이를 변환하지 않아 진단 프롬프트의 `json.dumps`가 터지던 버그 — 수정 + 회귀 테스트 추가, (2) 프롬프트가 존댓말을 지시했는데 반말로 답하던 문제 — 사전질문/챗봇 프롬프트에 강제 규칙 추가, (3) 도구 실행 전후 텍스트가 구분 없이 붙어 "…쌓였겠다!기록 완료했어."처럼 읽히던 문제 — 라운드 사이에 문단 구분 삽입, (4) 로드맵에 이미 있는 계획과 사실상 같은 계획을 챗봇이 또 만들던 문제 — 수정모드 프롬프트에 중복 확인 규칙 추가(재검증에서 도구를 호출하지 않고 중복을 알린 뒤 어떻게 할지 되묻는 것으로 개선 확인)
+
+## 알려진 한계 / 다음에 손볼 것
+
+- **비동기 job이 FastAPI BackgroundTasks에 묶여 있다.** 파싱·진단이 API 프로세스와 생사를 같이 하므로 배포 때마다 진행 중 job이 죽는다(기동 시 실패 처리로 사용자 경험만 막아둔 상태). 트래픽이 늘면 워커 큐(Celery/ARQ 등)로 분리해야 한다.
+- **로드맵·후속 추천은 동기 호출**이라 응답이 20~40초 걸릴 수 있다. 클라이언트 타임아웃이 문제가 되면 진단과 같은 job 패턴으로 옮길 것.
+- `career_gap_analysis`/로드맵의 "대학 진로 수업 방향" 제안은 실제 학과 커리큘럼 DB 없이 LLM 일반 지식에 의존한다.
+- 파서 검증은 실제 샘플 1건 기준이라 다른 학교/연도 포맷에서는 재조정이 필요할 수 있다.
+- 생기부에서 파싱된 행을 탭에서 수정한 뒤 재업로드하면 그 수정은 교체된다(직접 입력 행만 보존).

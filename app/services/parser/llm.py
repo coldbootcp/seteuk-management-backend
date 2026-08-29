@@ -3,31 +3,12 @@ import logging
 
 from openai import AsyncOpenAI
 
-from app.core.config import get_settings
 from app.schemas.seteuk import LLMActivityDraftList
+from app.services.llm import build_client, call_deepseek
+
+__all__ = ["build_client", "call_deepseek", "parse_block"]
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-
-
-def build_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
-        api_key=settings.deepseek_api_key,
-        base_url=settings.deepseek_base_url,
-        max_retries=0,
-    )
-
-
-async def call_deepseek(client: AsyncOpenAI, system_prompt: str, block_text: str) -> str:
-    response = await client.chat.completions.create(
-        model=settings.deepseek_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": block_text},
-        ],
-        response_format={"type": "json_object"},
-    )
-    return response.choices[0].message.content or ""
 
 
 async def parse_block(

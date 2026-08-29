@@ -17,6 +17,9 @@ wheels/
 .idea/
 .vscode/
 
+# 파이썬 프로젝트에 실수로 들어온 npm 산출물
+node_modules/
+
 # Test / coverage
 .pytest_cache/
 .coverage

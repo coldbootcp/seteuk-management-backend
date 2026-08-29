@@ -5,7 +5,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, statu
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
+from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.seteuk import SeteukAnalysisResult, UploadCreateResponse, UploadStatusResponse
 from app.services import seteuk_service
@@ -20,6 +22,7 @@ async def create_upload(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadCreateResponse:
+    await enforce_daily_limit(db, user.id, UsageAction.SETEUK_UPLOAD)
     file_bytes = await file.read()
     upload = await seteuk_service.create_upload(db, user.id, file_bytes)
     background_tasks.add_task(seteuk_service.run_parse_job, upload.id, file_bytes)

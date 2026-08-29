@@ -1,290 +1,406 @@
-# 세특연구소 백엔드 개발 계획 및 API 명세서 (v2)
+# 세특연구소 백엔드 API 명세서 (v3)
 
-## 1. 전체 개발 로드맵
+이 문서는 **실제 구현과 일치하는 명세**다. 코드가 바뀌면 여기도 함께 고친다.
+엔드포인트를 추가하기 전에 이 문서와 어긋나지 않는지 먼저 확인할 것.
 
-기능 의존성 순서에 따라 단계를 나눕니다. 각 단계는 이전 단계의 API/스키마를 기반으로 하므로 순서를 지키는 것을 권장합니다. (결제/구독은 이번 범위에서 제외)
+## 0. 서비스가 하는 일
 
-### Phase 0. 기반 구축
-- FastAPI 프로젝트 스캐폴딩, Docker 구성
-- PostgreSQL 스키마 설계 및 Alembic 마이그레이션 초기화
-- JWT 인증 (회원가입/로그인/토큰 재발급), 카카오 소셜 로그인
-- CI/CD (GitHub Actions) + Railway/Fly.io 배포 파이프라인
-- Sentry, structlog 초기 세팅
+고등학생이 3년에 걸친 세특 활동을 **기록하고, 그 유기적 연결을 관리하고, 다음 단계를
+계획하는** 플랫폼의 백엔드다. 두 축이 있다.
 
-### Phase 1. 생기부 파서
-- 생기부 파일 업로드 API (PDF/이미지)
-- LLM 기반 파싱 서비스: 출결, 교과성적, 독서활동, 수상경력, 봉사활동, 활동(자율/동아리/진로/세특/행발) 추출
-- 세특 문단 내 개별 활동(보고서/발표/실험 등) 세분화 로직 (`activity_type`)
-- 파싱 신뢰도 산출 및 저장, 원문 블록 보존
-- 파싱 결과 저장/조회 API
+1. **현재를 기록한다** — 생기부 업로드 또는 온보딩 질문으로 출발해, 이후 활동·성적·
+   수행평가·독서가 생길 때마다 각 탭이나 챗봇으로 쌓는다. 진단이 현재 상태를 서사로
+   정리하고 강점/약점을 짚는다.
+2. **미래를 계획한다** — 생기부의 핵심은 활동이 학년이 오를수록 고도화되는 것이다.
+   AI가 학기별 로드맵과 후속 탐구를 제안하고, 계획은 완료되면 실제 기록으로 승격되며
+   그 계보(`parent_activity_id`)가 남는다.
 
-### Phase 2. 기능1 — 학생부 DNA 진단
-- 학생 프로필 입력 API (필수/선택 2단계, 생기부 업로드 시 자동 채움 지원)
-- LLM 진단 서비스 레이어 (프롬프트 설계, 구조화 출력 검증, 재시도 로직)
-- 진단 결과 저장/조회 API
-- 온보딩 플로우: 회원가입 → (선택) 생기부 업로드 → 필수 정보 입력/확인 → 진단 실행 → AI 탭 이동
+이 "계획 → 실행 → 기록 → 다음 계획" 루프와 활동 계보가 범용 LLM과의 차별점이다.
 
-### Phase 3. AI 챗봇 대화
-- 대화 세션/메시지 테이블 설계
-- SSE 스트리밍 응답 엔드포인트
-- 컨텍스트 조립 로직 (프로필 + 최근 활동 + 최근 대화 이력)
-- `<수정>` 모드: 별도 시스템 프롬프트, 수정 제안 → 사용자 확인 → 프로필 반영 흐름
+## 1. 개발 로드맵 진행 상황
 
-### Phase 4. 탭 관리 — 성적 / 독서 / 활동
-- 파서 결과 기반 각 리소스 CRUD API (출결, 교과성적, 독서활동, 수상, 봉사, 활동)
-- 목록 조회 시 페이지네이션/필터(과목, 학년, 학기 등)
-- 파싱 결과를 사용자가 직접 수정/보완할 수 있는 편집 API
+| Phase | 내용 | 상태 |
+|---|---|---|
+| 0 | 기반 구축 — FastAPI, Docker, Alembic, JWT, 카카오 로그인, CI | 완료 |
+| 1 | 생기부 파서 (규칙기반 + LLM 하이브리드) | 완료 |
+| 2 | 기능1 — 진단 (3단계 LLM 파이프라인) | 완료 |
+| 3 | AI 챗봇 (SSE 스트리밍, '수정' 모드 도구 호출) | 완료 |
+| 4 | 탭 관리 (6개 리소스 CRUD + 계획/로드맵) | 완료 |
+| 5 | 기능2 — 후속 탐구 추천 | 완료 |
+| 6 | 모니터링 — structlog, Sentry, rate limiting, 좀비 job 정리 | 완료 |
 
-### Phase 5. 기능2 — 이전 활동 기반 후속 탐구 추천
-- 활동 선택(`activity_type` 기반 필터) → LLM 추천 서비스 호출 → 추천 결과 저장/조회
-- 추천 결과와 원본 활동 간 연결 관계 저장 (후속 확장 이력 추적용)
-
-### Phase 6. 모니터링 및 안정화
-- LLM 호출 실패율, 응답시간 대시보드
-- 파싱 신뢰도 낮은 케이스 재검토 플로우
-- Rate limiting (무료 진단 남용 방지)
-- 부하 테스트 및 로그 기반 프롬프트 튜닝
+결제/구독은 범위 밖이다. 임의로 구현하지 말 것.
 
 ---
 
-## 2. 데이터 모델 개요
+## 2. 데이터 모델
+
+### 2.1 두 트랙 원칙
+
+데이터는 성격에 따라 나뉜다.
+
+- **생기부발 공식 기록** — 학년-학기 단위, `source_upload_id`가 채워짐.
+- **사용자 직접 입력** — 같은 테이블이지만 `source_upload_id`가 null.
+- **주관적 답변(`student_interests`)** — 진로 희망, 관심 키워드, 제약 조건처럼 시간에
+  따라 바뀌는 것. 필드별 이력 로그이며, 같은 `field_key`를 7일 이내 다시 쓰면
+  `answered_at`을 유지한 채 값만 덮어쓴다(같은 주의 수정은 새 선언이 아니다).
+- **이력이 필요 없는 사실** — `users.name` / `current_grade` / `current_semester`.
+
+생기부를 다시 업로드하면 `source_upload_id`가 채워진 행만 지우고 교체한다.
+직접 입력한 행은 그대로 남는다.
+
+### 2.2 테이블
 
 | 테이블 | 주요 필드 | 비고 |
 |---|---|---|
-| `users` | id, email, kakao_id, created_at | 인증 기본 |
-| `seteuk_uploads` | id, user_id, parsing_confidence, status, raw_result, created_at | 생기부 업로드 이력 (PDF 원본은 저장하지 않고 파싱에만 사용) |
-| `attendance` | id, user_id, source_upload_id, grade, total_days, absence, note | 출결 상황 |
-| `academic_performance` | id, user_id, source_upload_id, grade, semester, category, subject, units, achievement_grade, student_count, raw_score, subject_average, std_deviation, rank | 교과 성적 |
-| `reading_activities` | id, user_id, source_upload_id, grade, semester, subject, title, author | 독서 활동 |
-| `awards` | id, user_id, source_upload_id, name, rank, date, raw_date | 수상 경력 (date는 ISO 8601 정규화, raw_date는 원문 보존) |
-| `volunteer_records` | id, user_id, source_upload_id, grade, date, raw_date, place, content, hours | 봉사 활동 |
-| `activities` | id, user_id, source_upload_id, grade, semester, activity_category, subject, activity_name, activity_type, role, description, keywords(JSONB), source_block, parsing_confidence | 자율/동아리/진로/세특/행발 통합 타임라인 |
+| `users` | id, email, password_hash, kakao_id, name, current_grade, current_semester | |
+| `refresh_tokens` | id(=jti), user_id, expires_at, revoked_at | 로그아웃으로 개별 토큰 무효화 |
+| `seteuk_uploads` | id, user_id, status, parsing_confidence, raw_result, failure_reason | PDF 원본은 저장하지 않음 |
+| `attendance` | id, user_id, source_upload_id, grade, total_days, absence, note | |
+| `academic_performance` | …, grade, semester, category, subject, units, achievement_grade, student_count, raw_score, subject_average, std_deviation, rank | |
+| `reading_activities` | …, grade, semester, subject, title, author | |
+| `awards` | …, name, rank, date, raw_date | date는 ISO 8601, 원문은 raw_date |
+| `volunteer_records` | …, grade, date, raw_date, place, content, hours | |
+| `activities` | …, **parent_activity_id**, grade, semester, activity_category, subject, activity_name, activity_type, role, description, keywords, source_block, parsing_confidence | 활동 계보의 기록 쪽 절반 |
+| `plan_items` | id, user_id, item_type, title, description, subject, target_grade, target_semester, due_date, status, origin, source_activity_id, source_recommendation_id, completed_activity_id, completed_reading_id, keywords | 미래 계획 / 로드맵 |
+| `student_interests` | id, user_id, field_key, value(JSONB), answered_at, updated_at | 챗봇의 장기 메모리 |
+| `diagnoses` | id, user_id, status, failure_reason, semester_summaries, domain_feedback, career_thread, overall_summary, strengths, weaknesses, career_gap_analysis, keyword_map | |
+| `recommendations` | id, user_id, source_activity_id, desired_activity_type, options(JSONB) | 기능2 |
+| `conversations` | id, user_id, title, created_at, updated_at | |
+| `messages` | id, conversation_id, role, content, mode, applied_actions(JSONB) | |
+| `usage_events` | id, user_id, action, created_at | 사용량 한도 카운터 |
 
-위 6개 테이블은 모두 `source_upload_id`(nullable, `seteuk_uploads.id` FK)를 가집니다. 생기부 업로드로 만들어진 행만 이 값이 채워지며, 수동 입력(향후 탭 관리 편집 등)은 null입니다. 같은 사용자가 생기부를 다시 업로드하면 `source_upload_id`가 채워진 기존 행만 삭제 후 새 결과로 교체되고, null인(수동 입력) 행은 그대로 유지됩니다.
-| `student_profiles` | user_id, grade, career_goal, interests, favorite_subjects, current_subject, self_assessed_strengths, self_assessed_weaknesses | 필수 입력 (생기부 업로드 시 자동 채움 가능) |
-| `student_profile_optional` | user_id, target_department, current_assignment | 선택 입력 (독서/동아리/보고서는 위 테이블과 연동) |
-| `diagnoses` | id, user_id, narrative_summary, strengths(JSONB), weaknesses(JSONB), risk_directions(JSONB), recommendations(JSONB), keyword_map(JSONB), created_at | 기능1 결과 |
-| `conversations` | id, user_id, created_at | 대화 세션 |
-| `messages` | id, conversation_id, role, content, mode(normal/edit), created_at | 챗봇 대화 |
-| `recommendations` | id, user_id, source_activity_id, topic, connection_reason, subject_relevance, career_relevance, difficulty, materials(JSONB), expected_output, expansion_potential | 기능2 결과 |
+### 2.3 enum
 
-`activity_type`은 `report | presentation | experiment | project | reading_linked | other` 중 하나이며, `activity_category`는 `과목세부특기사항 | 자율활동 | 동아리활동 | 진로활동 | 행동특성및종합의견` 중 하나입니다.
+- `activity_category`: `과목세부특기사항 | 자율활동 | 동아리활동 | 진로활동 |
+  행동특성및종합의견` (생기부 파서가 채움) + `수행평가 | 교외활동 | 기타`
+  (학생이 직접 기록)
+- `activity_type`: `report | presentation | experiment | project | reading_linked | other`
+- `plan_items.item_type`: `activity | reading | assessment | grade | volunteer | award | other`
+- `plan_items.status`: `planned | in_progress | done | dropped`
+- `plan_items.origin`: `user | ai_roadmap | recommendation | chatbot`
+- 챗봇 `mode`: `normal | edit`
+
+### 2.4 활동 계보
+
+3년간의 고도화를 추적하는 뼈대다.
+
+```
+activities.parent_activity_id  →  activities.id      (이미 한 활동 사이의 연결)
+plan_items.source_activity_id  →  activities.id      (아직 안 한 계획이 매달린 지점)
+plan_items.completed_activity_id → activities.id     (계획이 승격되며 생긴 기록)
+```
+
+계획을 완료 처리하면 `source_activity_id`가 새 활동의 `parent_activity_id`로 복사되어
+사슬이 이어진다. `GET /activities/{id}/lineage`가 사슬 전체(과거 활동 + 미래 계획)를
+한 번에 돌려준다.
 
 ---
 
-## 3. API 명세서
+## 3. API
 
 Base URL: `/api/v1`
-인증: `Authorization: Bearer {access_token}` (로그인/회원가입 제외 전 구간 필수)
+인증: `Authorization: Bearer {access_token}` (auth 엔드포인트 제외 전 구간 필수)
 
-### 3.1 인증 (Auth)
+### 3.1 인증
 
-**POST /auth/signup**
+**POST /auth/signup** → 201 `{ user_id, access_token, refresh_token }`
 ```json
-// Request
 { "email": "student@example.com", "password": "string" }
-// Response 201
-{ "user_id": "uuid", "access_token": "string", "refresh_token": "string" }
 ```
 
-**POST /auth/login**
-```json
-{ "email": "string", "password": "string" }
-// Response 200
-{ "access_token": "string", "refresh_token": "string" }
-```
+**POST /auth/login** → 200 `{ access_token, refresh_token }`
 
-**POST /auth/social/kakao**
+**POST /auth/social/kakao** → 200 `{ access_token, refresh_token, is_new_user }`
 ```json
 { "kakao_access_token": "string" }
-// Response 200 (신규면 201)
-{ "access_token": "string", "refresh_token": "string", "is_new_user": true }
 ```
+클라이언트가 카카오 SDK로 받은 access token을 보내면 서버가 카카오 API로 검증한다.
+이미 같은 이메일로 가입된 계정이 있으면 새 계정을 만들지 않고 연결한다. 이메일 제공에
+동의하지 않은 사용자도 가입된다.
 
-**POST /auth/refresh**
+**POST /auth/refresh** → 200 `{ access_token }`
 ```json
 { "refresh_token": "string" }
-// Response 200
-{ "access_token": "string" }
 ```
 
-**POST /auth/logout** — 204 No Content
-
----
+**POST /auth/logout** → 204
+```json
+{ "refresh_token": "string" }
+```
+해당 refresh 토큰만 무효화한다(다른 기기 세션은 유지). 이미 무효화된 토큰으로 다시
+호출해도 204다.
 
 ### 3.2 생기부 파서
 
-**POST /seteuk/uploads** (파일 업로드, multipart/form-data) — 별도 확인/적용 단계 없이,
-파싱이 끝나면(`status: done`) 결과가 자동으로 출결/성적/독서/수상/봉사/활동 테이블에
-반영됨. PDF 원본은 파싱에만 쓰이고 저장하지 않음. 같은 사용자가 다시 업로드하면 이전
-생기부 업로드로 채워진 행만 삭제 후 새 결과로 교체(수동 입력 데이터는 유지).
-```json
-// Response 201
-{ "upload_id": "uuid", "status": "processing" }
-```
+**POST /seteuk/uploads** (multipart/form-data, `file`) → 201 `{ upload_id, status }`
+파싱이 끝나면 결과가 6개 도메인 테이블에 자동 반영된다. 별도 확인/적용 단계는 없다.
+PDF 원본은 저장하지 않는다.
 
-**GET /seteuk/uploads/{upload_id}** — 처리 상태 조회
-```json
-// Response 200
-{ "status": "done", "parsing_confidence": 0.92 }
-// status: processing(파싱 및 저장 진행 중) | done(파싱+DB 반영 완료) | failed
-```
+**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence }`
+`status`: `processing | done | failed`
 
-**GET /seteuk/uploads/{upload_id}/result** — 파싱 결과 전체 조회
+**GET /seteuk/uploads/{upload_id}/result** → 200
 ```json
-// Response 200
 {
-  "attendance": [{ "grade": 2, "total_days": 190, "absence": 1, "note": "질병 결석 1일" }],
-  "academic_performance": [{
-    "grade": 2, "semester": 1, "category": "수학", "subject": "수학Ⅰ",
-    "units": 4, "achievement_grade": "A", "student_count": 236,
-    "raw_score": 96, "subject_average": 78.4, "std_deviation": 12.1, "rank": ""
-  }],
-  "reading_activities": [{ "grade": 2, "semester": 1, "subject": "생명과학", "title": "이기적 유전자", "author": "리처드 도킨스" }],
-  "awards": [{ "name": "수학 경시대회", "rank": "금상(1위)", "date": "2023-05-20" }],
-  "volunteer_records": [{ "grade": 2, "date": "2023-07-15", "place": "지역아동센터", "content": "학습 멘토링", "hours": 8 }],
-  "activities": [{
-    "grade": 2, "semester": 1, "activity_category": "과목세부특기사항", "subject": "수학Ⅰ",
-    "activity_name": "감염병 확산과 지수함수 모델", "activity_type": "report", "role": "",
-    "description": "string", "keywords": ["수학적 모델링", "감염병"], "parsing_confidence": 0.95
-  }],
-  "errors": []
+  "attendance": [...], "academic_performance": [...], "reading_activities": [...],
+  "awards": [...], "volunteer_records": [...], "activities": [...], "errors": []
 }
 ```
 
----
+### 3.3 프로필
 
-### 3.3 학생 프로필 & 진단 (기능1)
-
-**POST /profile**
+**POST /profile** → 200 (온보딩 필수 입력)
 ```json
 {
-  "grade": 2,
-  "career_goal": "데이터 기반 의학 연구",
-  "interests": ["생명과학", "통계"],
-  "favorite_subjects": ["수학", "생명과학"],
-  "past_activities": [{ "activity_id": "uuid" }]
-}
-// Response 201
-{ "profile_id": "uuid" }
-```
-
-**PATCH /profile/optional**
-```json
-{ "target_department": "의예과", "current_assignment": "string" }
-// Response 200
-```
-
-**GET /profile/me** — 현재 프로필 전체 조회 (필수+선택 병합)
-
-**POST /diagnosis**
-```json
-// Response 201
-{
-  "diagnosis_id": "uuid",
-  "narrative_summary": "string",
-  "strengths": ["string"],
-  "weaknesses": ["string"],
-  "risk_directions": ["string"],
-  "recommendations": ["string"],
-  "keyword_map": ["string"]
+  "name": "홍길동", "grade": 2, "semester": 1,
+  "career_goal": { "goal": "AI 연구원", "note": "string 또는 null" },
+  "target_department": "컴퓨터공학과",
+  "interest_keywords": ["머신러닝"],
+  "career_specificity": { "level": "specific", "known_concepts": [], "curious_topics": [] },
+  "preferred_output_types": ["report"],
+  "activity_channels": ["동아리"],
+  "roadmap_constraints": "string 또는 null",
+  "self_assessed_strengths": "string",
+  "self_assessed_weaknesses": "string"
 }
 ```
 
-**GET /diagnosis/latest**
-**GET /diagnosis/{diagnosis_id}**
+**GET /profile/me** → 200 — `users` + `student_interests` 최신값 병합.
 
----
+### 3.4 진단 (기능1)
 
-### 3.4 AI 챗봇 대화
+**GET /diagnosis/pre-questions** → 200 `{ questions: [...] }`
+최초 진단 전에만 동작한다(재진단이면 빈 배열). 생기부와 현재 답변의 갭을 보고 최대
+5개 질문을 만든다.
 
-**POST /conversations**
+**POST /diagnosis/pre-questions/answers** → 204
 ```json
-{ "conversation_id": "uuid" }
+{ "answers": [{ "key": "string", "prompt": "string", "answer": "string 또는 null" }] }
 ```
+답변을 대화처럼 취급해 LLM 추출을 거친 뒤, durable하다고 판단된 것만
+`student_interests`에 반영한다.
 
-**GET /conversations/{conversation_id}/messages**
+**POST /diagnosis** → 201 `{ diagnosis_id, status }` — 비동기 job.
 
-**POST /conversations/{conversation_id}/messages** (SSE 스트리밍)
+**GET /diagnosis/{id}**, **GET /diagnosis/latest** → 200
 ```json
-{ "content": "저는 사실 의대보다 생명공학 쪽에 관심이 더 커요", "mode": "edit" }
+{
+  "diagnosis_id": "uuid", "status": "done",
+  "semester_summaries": [{ "grade": 2, "semester": 1, "summary": "…",
+                           "standout_activities": ["…"] }],
+  "domain_feedback": [{ "domain": "성적", "feedback": "…" }],
+  "career_thread": [{ "grade": 1, "semester": 1, "type": "completed",
+                      "theme": "…", "source": "…", "connection": "…" }],
+  "overall_summary": "…", "strengths": ["…"], "weaknesses": ["…"],
+  "career_gap_analysis": "…", "keyword_map": ["…"]
+}
 ```
-```
-// Response: text/event-stream
-event: token
-data: {"delta": "말씀"}
-
-event: done
-data: {"message_id": "uuid", "edit_proposal": {"career_goal": "생명공학 연구"} }
-```
-
-**POST /conversations/{conversation_id}/messages/{message_id}/confirm-edit**
-```json
-{ "accepted": true, "final_values": { "career_goal": "생명공학 연구" } }
-// Response 200
-```
-
----
 
 ### 3.5 탭 관리 — 출결 / 성적 / 독서 / 수상 / 봉사 / 활동
 
-각 리소스는 동일한 CRUD 패턴을 따릅니다.
+6개 리소스가 동일한 CRUD 패턴을 따른다.
 
-**GET /academic-performance?grade=2&semester=1**
+| 리소스 | 경로 | 필터 |
+|---|---|---|
+| 출결 | `/attendance` | grade |
+| 교과 성적 | `/academic-performance` | grade, semester, subject, category |
+| 독서 | `/reading-activities` | grade, semester, subject |
+| 수상 | `/awards` | — |
+| 봉사 | `/volunteer-records` | grade |
+| 활동 | `/activities` | grade, semester, activity_category, activity_type, subject |
+
+- **GET /{resource}** → `{ "items": [...], "total": 12 }` (공통 `limit`≤200, `offset`)
+- **POST /{resource}** → 201, 생성된 행 전체
+- **GET /{resource}/{id}** → 200
+- **PATCH /{resource}/{id}** → 200 (부분 수정, 파싱 결과 보정 포함)
+- **DELETE /{resource}/{id}** → 204
+
+응답에는 읽기 전용 `source_upload_id`가 포함된다. null이면 직접 입력한 행이라
+생기부 재업로드에도 살아남는다. 생성 요청으로는 이 값을 지정할 수 없다.
+
+> 주의: 생기부에서 파싱된 행을 PATCH로 고친 뒤 생기부를 다시 업로드하면 그 수정은
+> 새 파싱 결과로 교체된다. 유지되어야 하는 보정이라면 직접 입력 행으로 다시 만들 것.
+
+**GET /activities/{id}/lineage** → 200
 ```json
-{ "items": [{ "id": "uuid", "subject": "수학Ⅰ", "achievement_grade": "A", "student_count": 236, "raw_score": 96 }], "total": 8 }
+{ "nodes": [
+  { "kind": "activity", "id": "uuid", "title": "감염병 확산 모델", "grade": 2,
+    "semester": 1, "status": "completed", "parent_id": null },
+  { "kind": "plan", "id": "uuid", "title": "SIR 모델로 확장", "grade": 2,
+    "semester": 2, "status": "planned", "parent_id": "uuid" }
+] }
 ```
+사슬의 어느 노드로 물어도 뿌리까지 거슬러 올라간 전체를 돌려준다. 이미 활동으로
+승격된 계획은 그 활동 노드로 대체된다.
 
-**GET /activities?activity_type=report&subject=수학**
+### 3.6 계획 & 로드맵
+
+**GET /plans** → `{ items, total }` (필터: item_type, status, target_grade, target_semester)
+
+**POST /plans** → 201
 ```json
-{ "items": [{ "id": "uuid", "activity_name": "string", "activity_type": "report", "description": "string" }], "total": 5 }
-```
-
-**POST /activities**
-```json
-{ "activity_category": "과목세부특기사항", "subject": "수학Ⅰ", "activity_name": "string", "activity_type": "report", "description": "string", "keywords": ["string"] }
-// Response 201
-{ "id": "uuid" }
-```
-
-**PATCH /activities/{id}** — 부분 수정 (파싱 결과 사용자 보정 포함)
-**DELETE /activities/{id}** — 204 No Content
-
-동일한 패턴으로 `/attendance`, `/reading-activities`, `/awards`, `/volunteer-records`도 제공합니다.
-
----
-
-### 3.6 후속 탐구 추천 (기능2)
-
-**POST /recommendations/follow-up**
-```json
-{ "source_activity_id": "uuid", "desired_activity_type": "report" }
-// Response 201
 {
-  "recommendation_id": "uuid",
-  "options": [
-    {
-      "topic": "로지스틱 함수로 분석한 감염병 확산 모델의 한계",
-      "connection_reason": "string",
-      "subject_relevance": "string",
-      "career_relevance": "string",
-      "record_potential": "string",
-      "difficulty": "medium",
-      "materials": ["string"],
-      "expected_output": "string",
-      "expansion_potential": "string"
-    }
-  ]
+  "item_type": "activity", "title": "SIR 모델로 확장",
+  "description": "string 또는 null", "subject": "수학Ⅰ",
+  "target_grade": 2, "target_semester": 2, "due_date": "2026-11-30",
+  "keywords": ["감염병"], "source_activity_id": "uuid 또는 null",
+  "source_recommendation_id": "uuid 또는 null"
 }
 ```
 
-**GET /recommendations/{id}**
+**PATCH /plans/{id}** → 200 · **DELETE /plans/{id}** → 204
+
+**POST /plans/{id}/complete** → 200
+```json
+// Request — 비우면 계획의 값과 사용자의 현재 학년/학기로 채운다
+{ "grade": 2, "semester": 2, "activity_category": "과목세부특기사항",
+  "activity_type": "report", "description": "…", "author": "…" }
+// Response
+{ "plan_item": { … , "status": "done" },
+  "created_activity_id": "uuid 또는 null", "created_reading_id": "uuid 또는 null" }
+```
+`activity`/`assessment` 계획은 활동으로, `reading` 계획은 독서 기록으로 승격된다.
+나머지 타입은 상태만 `done`이 된다. 이미 완료된 계획을 다시 완료하면 409
+`INVALID_PLAN_TRANSITION`.
+
+**POST /plans/roadmap** → 200
+```json
+// Request — 전부 선택
+{ "until_grade": 3, "until_semester": 2, "focus": "string 또는 null",
+  "replace_existing": true }
+// Response
+{ "semesters": [{ "grade": 2, "semester": 2, "theme": "…", "rationale": "…",
+                  "items": [{ "item_type": "activity", "title": "…",
+                              "description": "…", "subject": "…",
+                              "keywords": ["…"], "source_activity_id": "uuid 또는 null" }] }],
+  "created_plan_items": [ … ] }
+```
+현재 학기 **다음**부터 목표 학기까지가 대상이다. `replace_existing`이 true여도
+지워지는 것은 **대상 구간의 손대지 않은(`planned`) AI 로드맵 항목뿐**이며, 학생이
+직접 세웠거나 이미 진행 중인 계획은 유지된다.
+
+### 3.7 후속 탐구 추천 (기능2)
+
+**POST /recommendations/follow-up** → 201
+```json
+// Request
+{ "source_activity_id": "uuid", "desired_activity_type": "experiment",
+  "note": "string 또는 null" }
+// Response
+{ "id": "uuid", "source_activity_id": "uuid", "desired_activity_type": "experiment",
+  "options": [{
+    "topic": "…", "connection_reason": "…", "subject_relevance": "…",
+    "career_relevance": "…", "record_potential": "…", "difficulty": "medium",
+    "materials": ["…"], "expected_output": "…", "expansion_potential": "…"
+  }],
+  "created_at": "…" }
+```
+프롬프트에는 대상 활동 하나가 아니라 그 활동의 **계보 사슬 전체**와 최신 진단이 함께
+들어간다 — 범용 추천이 아니라 고도화 제안이어야 하기 때문이다.
+
+**GET /recommendations**, **GET /recommendations/{id}**
+
+**POST /recommendations/{id}/adopt** → 201 (생성된 계획)
+```json
+{ "option_index": 0, "item_type": "activity", "target_grade": 2, "target_semester": 2 }
+```
+선택지를 계획으로 담는다. 계획은 추천의 출처 활동을 물려받아, 나중에 완료하면 그
+활동의 자식으로 기록된다.
+
+### 3.8 AI 챗봇
+
+**POST /conversations** → 201 `{ id, title, created_at, updated_at }`
+**GET /conversations** → `{ items, total }` (최근 대화 순)
+**DELETE /conversations/{id}** → 204
+**GET /conversations/{id}/messages** → 200 메시지 배열
+
+**POST /conversations/{id}/messages** → SSE (`text/event-stream`)
+```json
+{ "content": "이기적 유전자 읽었어요", "mode": "edit" }
+```
+```
+event: action
+data: {"tool": "add_reading", "arguments": {"title": "이기적 유전자"}, "result": {"reading_id": "uuid", "title": "이기적 유전자"}}
+
+event: token
+data: {"delta": "독서 기록에"}
+
+event: done
+data: {"message_id": "uuid", "applied_actions": [...]}
+
+event: error
+data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해주세요"}
+```
+
+**모드**
+
+- `normal` — 도구를 전혀 넘기지 않는다. 개인화된 세특 메모리를 근거로 답하고 함께
+  진로를 고민하는 역할만 한다. 이 모드에서는 어떤 것도 저장되지 않는다.
+- `edit` — 사용자가 '수정' 토글을 켠 상태. 별도 확인 단계 없이 도구를 바로 실행한다
+  (토글 자체가 동의다). 실행된 것은 `action` 이벤트로 흘러나오고 메시지의
+  `applied_actions`에 남는다.
+
+**수정 모드 도구** — `add_reading`, `add_activity`, `update_activity`, `add_award`,
+`add_volunteer_record`, `add_academic_performance`, `add_plan`, `update_plan`,
+`complete_plan`, `remember`(개인화 메모리), `update_profile_basics`, `run_diagnosis`,
+`recommend_follow_up`.
+
+> **삭제 도구는 의도적으로 없다.** 대화 중의 오해로 3년치 기록이 사라지는 사고를 막기
+> 위해, 삭제는 탭의 DELETE 엔드포인트(명시적 조작)로만 가능하다.
+
+챗봇의 개인화 재료는 매 요청마다 조립된다: 기본 정보 + `student_interests`(메모리) +
+최신 진단 + 활동/성적/독서/수상/봉사/출결 + 진행 중인 계획 + 직전 20개 메시지. 각
+영역에는 상한이 있고, 잘린 경우 `counts`에 전체 개수가 함께 들어가 챗봇이 "기록이 더
+있다"는 사실을 알 수 있다.
 
 ---
 
 ## 4. 공통 규칙
 
-- 모든 에러 응답: `{ "error_code": "string", "message": "string" }`
-- LLM 호출 실패 시: `503 { "error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해주세요" }` + 클라이언트 재시도 버튼 노출
-- 생기부 파싱 실패/저신뢰도 시: `parsing_confidence < 0.6`인 섹션은 응답에 `low_confidence: true` 플래그 포함, 클라이언트는 사용자 확인 UI 노출
-- 날짜/시간: 모든 timestamp는 ISO 8601 UTC, 원문 날짜가 필요한 필드는 `raw_date`로 별도 보존
+### 4.1 에러
+
+모든 에러는 `{ "error_code": "string", "message": "string" }` 형태다(검증 오류는
+`details`가 추가된다).
+
+| error_code | HTTP | 언제 |
+|---|---|---|
+| `VALIDATION_ERROR` | 422 | 요청 형식 오류 |
+| `EMAIL_ALREADY_EXISTS` | 409 | 중복 가입 |
+| `INVALID_CREDENTIALS` | 401 | 로그인 실패 |
+| `INVALID_TOKEN` | 401 | 토큰 무효/만료/무효화됨 |
+| `SOCIAL_AUTH_FAILED` | 401 | 카카오 토큰 검증 실패 |
+| `USER_NOT_FOUND` | 404 | |
+| `UNSUPPORTED_FILE` | 422 | 지원하지 않는 업로드 형식 |
+| `UPLOAD_NOT_FOUND` / `UPLOAD_NOT_READY` | 404 / 409 | |
+| `DIAGNOSIS_NOT_FOUND` / `DIAGNOSIS_NOT_READY` | 404 / 409 | |
+| `RECORD_NOT_FOUND` | 404 | 탭 리소스 |
+| `ACTIVITY_NOT_FOUND` | 404 | |
+| `PLAN_ITEM_NOT_FOUND` | 404 | |
+| `INVALID_PLAN_TRANSITION` | 409 | 이미 완료된 계획 재완료 등 |
+| `CONVERSATION_NOT_FOUND` | 404 | |
+| `RECOMMENDATION_NOT_FOUND` | 404 | 추천 또는 선택지 인덱스 없음 |
+| `RATE_LIMITED` | 429 | 하루 사용량 초과 |
+| `LLM_UNAVAILABLE` | 503 | LLM 3회 재시도 후 실패 |
+| `INTERNAL_ERROR` | 500 | |
+
+### 4.2 사용량 한도
+
+사용자별 24시간 슬라이딩 윈도우. 기본값은 `.env.example` 참고.
+
+| 작업 | 기본 한도/일 |
+|---|---|
+| 생기부 업로드 | 5 |
+| 진단 | 5 |
+| 로드맵 생성 | 10 |
+| 후속 추천 | 20 |
+| 챗봇 메시지 | 100 |
+
+### 4.3 기타
+
+- 모든 timestamp는 ISO 8601 UTC. 원문 날짜가 필요한 필드는 `raw_date`로 별도 보존.
+- 모든 응답에 `X-Request-ID`가 붙는다. 클라이언트가 같은 헤더로 보내면 그 값을
+  이어받아 로그와 대조할 수 있다.
+- 헬스체크: `/health`(프로세스), `/health/ready`(DB 포함 — 배포 헬스체크는 이쪽).
+- 프로세스가 죽어 `processing`에 멈춘 파싱/진단 job은 서버 기동 시 실패로 확정된다
+  (`STALE_JOB_TIMEOUT_MINUTES`).

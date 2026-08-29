@@ -11,11 +11,29 @@ from app.db.base import Base
 
 
 class ActivityCategory(StrEnum):
+    """앞의 5개는 생기부 파서가 채우는 공식 항목이고, 뒤의 3개는 학생이 탭이나
+    챗봇에서 직접 기록하는 항목이다 — 수행평가처럼 생기부에 별도 항목이 없지만
+    세특의 재료가 되는 활동을 버리지 않기 위해 분리해 둔다."""
+
     SUBJECT_SPECIALTY = "과목세부특기사항"
     AUTONOMOUS = "자율활동"
     CLUB = "동아리활동"
     CAREER = "진로활동"
     BEHAVIOR = "행동특성및종합의견"
+    ASSESSMENT = "수행평가"
+    EXTERNAL = "교외활동"
+    ETC = "기타"
+
+
+SETEUK_SOURCED_CATEGORIES = frozenset(
+    {
+        ActivityCategory.SUBJECT_SPECIALTY,
+        ActivityCategory.AUTONOMOUS,
+        ActivityCategory.CLUB,
+        ActivityCategory.CAREER,
+        ActivityCategory.BEHAVIOR,
+    }
+)
 
 
 class ActivityType(StrEnum):
@@ -44,6 +62,11 @@ class Activity(Base):
         ForeignKey("seteuk_uploads.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    # 이 활동이 어떤 이전 활동을 고도화한 것인지 — 3년 계보 추적의 기록 쪽 절반.
+    # plan_items를 거쳐 완료된 활동은 계획의 source_activity_id가 여기로 복사된다.
+    parent_activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
     )
     grade: Mapped[int] = mapped_column(Integer, nullable=False)
     semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
