@@ -9,6 +9,7 @@ from app.schemas.diagnosis import (
     DomainFeedback,
     DomainFeedbackDraft,
     ExtractedInterestsResult,
+    NarrativeReportDraft,
     PreQuestion,
     PreQuestionAnswer,
     PreQuestionsResponse,
@@ -20,6 +21,7 @@ from app.services.diagnosis.data import SemesterGroup, get_domain_rows, get_seme
 from app.services.diagnosis.prompts import (
     DOMAIN_FEEDBACK_SYSTEM_PROMPT,
     INTEREST_EXTRACTION_SYSTEM_PROMPT,
+    NARRATIVE_REPORT_SYSTEM_PROMPT,
     PRE_QUESTION_SYSTEM_PROMPT,
     SEMESTER_SUMMARY_SYSTEM_PROMPT,
     SYNTHESIS_SYSTEM_PROMPT,
@@ -86,9 +88,24 @@ async def _summarize_domain(
     return DomainFeedback(domain=domain, feedback=draft.feedback)
 
 
+async def _write_narrative_report(
+    synthesis: SynthesisResult, interests: dict[str, Any]
+) -> str:
+    """4단계 — 3단계(종합) 결과만 입력으로 받는다(원본 데이터 재조회 없음). 진단당
+    1회만 호출되고 diagnoses.narrative_report에 저장되므로, 조회할 때마다 다시
+    LLM을 부르지 않고 같은 문구를 돌려줄 수 있다."""
+    user_content = json.dumps(
+        {"career_context": interests, **synthesis.model_dump()}, ensure_ascii=False
+    )
+    draft = await call_structured(
+        NARRATIVE_REPORT_SYSTEM_PROMPT, user_content, NarrativeReportDraft
+    )
+    return draft.report
+
+
 async def run_diagnosis_pipeline(
     db: AsyncSession, user_id: uuid.UUID, interests: dict[str, Any]
-) -> tuple[list[SemesterSummary], list[DomainFeedback], SynthesisResult]:
+) -> tuple[list[SemesterSummary], list[DomainFeedback], SynthesisResult, str]:
     semester_groups = await get_semester_groups(db, user_id)
     domain_rows = await get_domain_rows(db, user_id)
     non_empty_domains = [(domain, rows) for domain, rows in domain_rows.items() if rows]
@@ -115,5 +132,6 @@ async def run_diagnosis_pipeline(
         ensure_ascii=False,
     )
     synthesis = await call_structured(SYNTHESIS_SYSTEM_PROMPT, synthesis_input, SynthesisResult)
+    narrative_report = await _write_narrative_report(synthesis, interests)
 
-    return semester_summaries, domain_feedback, synthesis
+    return semester_summaries, domain_feedback, synthesis, narrative_report

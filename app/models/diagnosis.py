@@ -43,6 +43,12 @@ class Diagnosis(Base):
     career_gap_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     keyword_map: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
+    # 4단계 산출물 — 위 구조화 필드들을 사용자에게 그대로 보여주면 데이터 덤프처럼
+    # 읽히므로, 챗봇과 같은 목소리로 하나의 글로 엮은 리포트를 별도로 저장해 둔다.
+    # 3단계 결과만 입력받으므로(원본 데이터 재조회 없음) 추가 비용은 진단당 1회뿐이고,
+    # 조회할 때마다 문구가 바뀌지 않아 사용자가 매번 같은 내용을 다시 읽을 수 있다.
+    narrative_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )

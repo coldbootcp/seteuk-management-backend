@@ -6,6 +6,7 @@ import app.services.diagnosis_service as diagnosis_service
 from app.schemas.diagnosis import (
     DomainFeedbackDraft,
     ExtractedInterestsResult,
+    NarrativeReportDraft,
     PreQuestion,
     PreQuestionsResponse,
     SemesterSummaryDraft,
@@ -49,6 +50,8 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
         return DomainFeedbackDraft(feedback="이 분야에서는 이런 점이 좋았습니다.")
     if response_model is SynthesisResult:
         return FAKE_SYNTHESIS
+    if response_model is NarrativeReportDraft:
+        return NarrativeReportDraft(report="챗봇 말투로 풀어쓴 리포트입니다.")
     raise AssertionError(f"unexpected response_model: {response_model}")
 
 
@@ -96,6 +99,8 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     assert body["status"] == "done"
     assert body["overall_summary"] == "종합 요약입니다."
     assert body["career_thread"][0]["theme"] == "테스트 활동"
+    # 4단계 — 구조화 필드와 별개로 챗봇 말투 리포트도 함께 저장/반환된다.
+    assert body["narrative_report"] == "챗봇 말투로 풀어쓴 리포트입니다."
 
     latest_response = await client.get("/api/v1/diagnosis/latest", headers=auth_headers)
     assert latest_response.json()["diagnosis_id"] == diagnosis_id

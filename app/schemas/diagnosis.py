@@ -70,6 +70,9 @@ class DiagnosisResult(BaseModel):
     weaknesses: list[str] = []
     career_gap_analysis: str | None = None
     keyword_map: list[str] = []
+    # 4단계 산출물 — 위 구조화 필드를 챗봇과 같은 목소리로 엮은 리포트.
+    # 진단이 done이 아니면 아직 없으므로 null.
+    narrative_report: str | None = None
 
 
 # --- Internal pipeline models (LLM structured-output targets, not exposed via API) ---
@@ -97,6 +100,12 @@ class SynthesisResult(BaseModel):
     weaknesses: list[str]
     career_gap_analysis: str
     keyword_map: list[str]
+
+
+class NarrativeReportDraft(BaseModel):
+    """4단계 산출물 — report 하나만 담은 자유 서술."""
+
+    report: str
 
 
 class ExtractedInterest(BaseModel):

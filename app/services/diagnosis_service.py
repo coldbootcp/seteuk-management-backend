@@ -53,9 +53,12 @@ async def run_diagnosis_job(diagnosis_id: uuid.UUID, user_id: uuid.UUID) -> None
 
         try:
             interests = await get_current_interests(db, user_id)
-            semester_summaries, domain_feedback, synthesis = await pipeline.run_diagnosis_pipeline(
-                db, user_id, interests
-            )
+            (
+                semester_summaries,
+                domain_feedback,
+                synthesis,
+                narrative_report,
+            ) = await pipeline.run_diagnosis_pipeline(db, user_id, interests)
             diagnosis.semester_summaries = [s.model_dump(mode="json") for s in semester_summaries]
             diagnosis.domain_feedback = [d.model_dump(mode="json") for d in domain_feedback]
             diagnosis.career_thread = [t.model_dump(mode="json") for t in synthesis.career_thread]
@@ -64,6 +67,7 @@ async def run_diagnosis_job(diagnosis_id: uuid.UUID, user_id: uuid.UUID) -> None
             diagnosis.weaknesses = synthesis.weaknesses
             diagnosis.career_gap_analysis = synthesis.career_gap_analysis
             diagnosis.keyword_map = synthesis.keyword_map
+            diagnosis.narrative_report = narrative_report
             diagnosis.status = DiagnosisStatus.DONE.value
         except Exception as exc:
             diagnosis.status = DiagnosisStatus.FAILED.value
@@ -108,4 +112,5 @@ def to_result(diagnosis: Diagnosis) -> DiagnosisResult:
         weaknesses=diagnosis.weaknesses or [],
         career_gap_analysis=diagnosis.career_gap_analysis,
         keyword_map=diagnosis.keyword_map or [],
+        narrative_report=diagnosis.narrative_report,
     )

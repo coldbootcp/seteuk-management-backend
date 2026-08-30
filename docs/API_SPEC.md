@@ -193,9 +193,18 @@ PDF 원본은 저장하지 않는다.
   "career_thread": [{ "grade": 1, "semester": 1, "type": "completed",
                       "theme": "…", "source": "…", "connection": "…" }],
   "overall_summary": "…", "strengths": ["…"], "weaknesses": ["…"],
-  "career_gap_analysis": "…", "keyword_map": ["…"]
+  "career_gap_analysis": "…", "keyword_map": ["…"],
+  "narrative_report": "…"
 }
 ```
+`narrative_report`는 위 구조화 필드를 그대로 나열하지 않고 챗봇과 같은 목소리로
+하나의 글로 엮은 리포트다(소제목·목록 없이 5~10개 문단). 3단계(종합) 결과만
+입력받는 4단계 LLM 호출로 진단당 1회만 생성되어 `diagnoses.narrative_report`에
+저장되므로, 조회할 때마다 다시 호출하지 않고 같은 문구를 돌려준다. `status`가
+`done`이 아니면 `null`이다. 클라이언트가 "진단 결과" 화면에 보여줄 기본 리포트는
+이 필드이고, `overall_summary`/`strengths`/`weaknesses`/`career_thread` 등은 그
+리포트를 만든 재료이자 다른 화면(예: 강점/약점 카드, 진로 타임라인)에서 구조화된
+채로 쓰기 위해 함께 남겨둔 것이다.
 
 ### 3.5 탭 관리 — 출결 / 성적 / 독서 / 수상 / 봉사 / 활동
 
