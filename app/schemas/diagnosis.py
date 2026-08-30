@@ -28,16 +28,49 @@ class PreQuestionAnswersRequest(BaseModel):
     answers: list[PreQuestionAnswer] = []
 
 
-class SemesterSummary(BaseModel):
+# --- 성적 추이 섹션 — LLM을 거치지 않는 순수 데이터. 프론트가 그래프로 그린다. ---
+
+
+class GradesTrendPoint(BaseModel):
     grade: int
     semester: int
-    summary: str
-    standout_activities: list[str] = []
+    achievement_grade: str | None = None
+    raw_score: float | None = None
+    subject_average: float | None = None
+    std_deviation: float | None = None
+    rank: str | None = None
 
 
-class DomainFeedback(BaseModel):
-    domain: str
-    feedback: str
+class GradesTrendSubject(BaseModel):
+    subject: str
+    category: str
+    points: list[GradesTrendPoint]
+
+
+class GradesTrendOverallPoint(BaseModel):
+    grade: int
+    semester: int
+    average_raw_score: float | None = None
+    subject_count: int
+
+
+class GradesTrend(BaseModel):
+    subjects: list[GradesTrendSubject] = []
+    overall: list[GradesTrendOverallPoint] = []
+
+
+# --- 학기별 평가 섹션 — 학기당 1회 LLM 호출, 성적/독서/활동 3개 독립 텍스트 ---
+
+
+class SemesterReview(BaseModel):
+    grade: int
+    semester: int
+    grades_review: str
+    reading_review: str
+    activities_review: str
+
+
+# --- 진로 유기적 평가 섹션 — 활동/수상/봉사를 아우르는 하나의 사슬(완료+제안) ---
 
 
 class CareerThreadEntry(BaseModel):
@@ -62,50 +95,38 @@ class DiagnosisStatusResponse(BaseModel):
 class DiagnosisResult(BaseModel):
     diagnosis_id: UUID
     status: DiagnosisStatus
-    semester_summaries: list[SemesterSummary] = []
-    domain_feedback: list[DomainFeedback] = []
+    grades_trend: GradesTrend | None = None
+    semester_reviews: list[SemesterReview] = []
     career_thread: list[CareerThreadEntry] = []
-    overall_summary: str | None = None
+    # 종합 평가 — semester_reviews와 career_thread의 결과만 입력받아 생성된다
+    # (원본 데이터 재조회 없음). unrecorded_points는 "지금까지 기록되지 않았지만
+    # 이 진로라면 있어야 할 것들"이다.
     strengths: list[str] = []
     weaknesses: list[str] = []
-    career_gap_analysis: str | None = None
-    keyword_map: list[str] = []
-    # 4단계 산출물 — 위 구조화 필드를 챗봇과 같은 목소리로 엮은 리포트.
-    # 진단이 done이 아니면 아직 없으므로 null.
-    narrative_report: str | None = None
+    unrecorded_points: list[str] = []
 
 
 # --- Internal pipeline models (LLM structured-output targets, not exposed via API) ---
 
 
-class SemesterSummaryDraft(BaseModel):
-    """1단계 산출물 — grade/semester는 LLM이 아니라 파이프라인이 붙인다."""
+class SemesterReviewDraft(BaseModel):
+    """학기별 평가 산출물 — grade/semester는 LLM이 아니라 파이프라인이 붙인다."""
 
-    summary: str
-    standout_activities: list[str] = []
-
-
-class DomainFeedbackDraft(BaseModel):
-    """2단계 산출물 — domain은 파이프라인이 붙인다."""
-
-    feedback: str
+    grades_review: str
+    reading_review: str
+    activities_review: str
 
 
-class SynthesisResult(BaseModel):
-    """3단계(종합) 산출물."""
-
+class CareerThreadDraft(BaseModel):
     career_thread: list[CareerThreadEntry]
-    overall_summary: str
+
+
+class OverallAssessmentDraft(BaseModel):
+    """종합 평가 산출물 — semester_reviews/career_thread만 입력받아 생성된다."""
+
     strengths: list[str]
     weaknesses: list[str]
-    career_gap_analysis: str
-    keyword_map: list[str]
-
-
-class NarrativeReportDraft(BaseModel):
-    """4단계 산출물 — report 하나만 담은 자유 서술."""
-
-    report: str
+    unrecorded_points: list[str]
 
 
 class ExtractedInterest(BaseModel):

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -17,6 +17,11 @@ class DiagnosisStatus(StrEnum):
 
 
 class Diagnosis(Base):
+    """진단은 생기부 입력만으로는 알 수 없는, 분석이 있어야 드러나는 내용을 저장하는
+    단계다. 진단 보고서(API 응답)는 이 저장된 내용을 사용자가 보기 좋게 꺼내 주는
+    것뿐이다. 각 필드는 서로 다른 섹션이고, 서로 독립적으로 계산된다 — LLM이 한 번에
+    전부를 종합하려다 근거 없이 추상적으로 흐르는 것을 막기 위해서다."""
+
     __tablename__ = "diagnoses"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -30,24 +35,22 @@ class Diagnosis(Base):
     )
     failure_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
-    # 1단계 산출물 — 학기별 개별 요약
-    semester_summaries: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # 2단계 산출물 — 분야별(성적/활동/수상/봉사/독서) 피드백
-    domain_feedback: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # 3단계 산출물 — 과거(completed)+미래(suggested)가 하나로 이어진 진로 스토리
+    # 성적 추이 — LLM을 거치지 않는 순수 데이터(GradesTrend). 프론트가 그래프로 그린다.
+    grades_trend: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 학기별 평가 — 학기당 1회 LLM 호출. 그 학기의 성적/독서/활동 데이터만 입력받아
+    # 세 개의 독립된 텍스트(grades_review/reading_review/activities_review)를 낸다.
+    semester_reviews: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 진로 유기적 평가 — 활동 전체(계보 포함) + 수상 + 봉사를 함께 입력받아, 진로
+    # 관점에서 의미 있는 것만 사슬로 엮는다(중요하지 않은 건 자동으로 빠진다).
+    # 과거(completed)+미래(suggested)가 학년-학기 순으로 하나의 배열에 담긴다.
     career_thread: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
-    overall_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 종합 평가 — semester_reviews와 career_thread의 "결과"만 입력받아 생성된다
+    # (원본 데이터 재조회 없음). unrecorded_points는 이 진로라면 있어야 하는데
+    # 아직 기록에 없는 것들.
     strengths: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     weaknesses: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    career_gap_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
-    keyword_map: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-
-    # 4단계 산출물 — 위 구조화 필드들을 사용자에게 그대로 보여주면 데이터 덤프처럼
-    # 읽히므로, 챗봇과 같은 목소리로 하나의 글로 엮은 리포트를 별도로 저장해 둔다.
-    # 3단계 결과만 입력받으므로(원본 데이터 재조회 없음) 추가 비용은 진단당 1회뿐이고,
-    # 조회할 때마다 문구가 바뀌지 않아 사용자가 매번 같은 내용을 다시 읽을 수 있다.
-    narrative_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unrecorded_points: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

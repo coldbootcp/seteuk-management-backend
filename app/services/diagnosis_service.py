@@ -53,21 +53,15 @@ async def run_diagnosis_job(diagnosis_id: uuid.UUID, user_id: uuid.UUID) -> None
 
         try:
             interests = await get_current_interests(db, user_id)
-            (
-                semester_summaries,
-                domain_feedback,
-                synthesis,
-                narrative_report,
-            ) = await pipeline.run_diagnosis_pipeline(db, user_id, interests)
-            diagnosis.semester_summaries = [s.model_dump(mode="json") for s in semester_summaries]
-            diagnosis.domain_feedback = [d.model_dump(mode="json") for d in domain_feedback]
-            diagnosis.career_thread = [t.model_dump(mode="json") for t in synthesis.career_thread]
-            diagnosis.overall_summary = synthesis.overall_summary
-            diagnosis.strengths = synthesis.strengths
-            diagnosis.weaknesses = synthesis.weaknesses
-            diagnosis.career_gap_analysis = synthesis.career_gap_analysis
-            diagnosis.keyword_map = synthesis.keyword_map
-            diagnosis.narrative_report = narrative_report
+            grades_trend, semester_reviews, career_thread, overall = (
+                await pipeline.run_diagnosis_pipeline(db, user_id, interests)
+            )
+            diagnosis.grades_trend = grades_trend.model_dump(mode="json")
+            diagnosis.semester_reviews = [s.model_dump(mode="json") for s in semester_reviews]
+            diagnosis.career_thread = [t.model_dump(mode="json") for t in career_thread]
+            diagnosis.strengths = overall.strengths
+            diagnosis.weaknesses = overall.weaknesses
+            diagnosis.unrecorded_points = overall.unrecorded_points
             diagnosis.status = DiagnosisStatus.DONE.value
         except Exception as exc:
             diagnosis.status = DiagnosisStatus.FAILED.value
@@ -104,13 +98,10 @@ def to_result(diagnosis: Diagnosis) -> DiagnosisResult:
     return DiagnosisResult(
         diagnosis_id=diagnosis.id,
         status=diagnosis.status,
-        semester_summaries=diagnosis.semester_summaries or [],
-        domain_feedback=diagnosis.domain_feedback or [],
+        grades_trend=diagnosis.grades_trend,
+        semester_reviews=diagnosis.semester_reviews or [],
         career_thread=diagnosis.career_thread or [],
-        overall_summary=diagnosis.overall_summary,
         strengths=diagnosis.strengths or [],
         weaknesses=diagnosis.weaknesses or [],
-        career_gap_analysis=diagnosis.career_gap_analysis,
-        keyword_map=diagnosis.keyword_map or [],
-        narrative_report=diagnosis.narrative_report,
+        unrecorded_points=diagnosis.unrecorded_points or [],
     )

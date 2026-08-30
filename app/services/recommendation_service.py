@@ -80,9 +80,9 @@ async def create_follow_up(
             "current_semester": user.current_semester,
             "diagnosis": (
                 {
-                    "overall_summary": diagnosis.overall_summary,
                     "strengths": diagnosis.strengths,
                     "weaknesses": diagnosis.weaknesses,
+                    "unrecorded_points": diagnosis.unrecorded_points,
                 }
                 if diagnosis
                 else None

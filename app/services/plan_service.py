@@ -180,10 +180,9 @@ async def generate_roadmap(
             "career_context": interests,
             "diagnosis": (
                 {
-                    "overall_summary": diagnosis.overall_summary,
                     "strengths": diagnosis.strengths,
                     "weaknesses": diagnosis.weaknesses,
-                    "career_gap_analysis": diagnosis.career_gap_analysis,
+                    "unrecorded_points": diagnosis.unrecorded_points,
                     "career_thread": diagnosis.career_thread,
                 }
                 if diagnosis

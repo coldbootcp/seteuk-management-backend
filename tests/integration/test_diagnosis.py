@@ -4,17 +4,16 @@ from httpx import AsyncClient
 import app.services.diagnosis.pipeline as pipeline
 import app.services.diagnosis_service as diagnosis_service
 from app.schemas.diagnosis import (
-    DomainFeedbackDraft,
+    CareerThreadDraft,
     ExtractedInterestsResult,
-    NarrativeReportDraft,
+    OverallAssessmentDraft,
     PreQuestion,
     PreQuestionsResponse,
-    SemesterSummaryDraft,
-    SynthesisResult,
+    SemesterReviewDraft,
 )
 from tests.conftest import TestSessionLocal
 
-FAKE_SYNTHESIS = SynthesisResult(
+FAKE_CAREER_THREAD = CareerThreadDraft(
     career_thread=[
         {
             "grade": 1,
@@ -24,12 +23,7 @@ FAKE_SYNTHESIS = SynthesisResult(
             "source": "활동: 테스트",
             "connection": "다음 단계로 이어짐",
         }
-    ],
-    overall_summary="종합 요약입니다.",
-    strengths=["강점1"],
-    weaknesses=["약점1"],
-    career_gap_analysis="갭 분석입니다.",
-    keyword_map=["키워드1"],
+    ]
 )
 
 
@@ -44,14 +38,18 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
         return ExtractedInterestsResult(
             items=[{"field_key": "motivation", "value": "책을 읽고 관심이 생김"}]
         )
-    if response_model is SemesterSummaryDraft:
-        return SemesterSummaryDraft(summary="이 학기 요약입니다.", standout_activities=["활동A"])
-    if response_model is DomainFeedbackDraft:
-        return DomainFeedbackDraft(feedback="이 분야에서는 이런 점이 좋았습니다.")
-    if response_model is SynthesisResult:
-        return FAKE_SYNTHESIS
-    if response_model is NarrativeReportDraft:
-        return NarrativeReportDraft(report="챗봇 말투로 풀어쓴 리포트입니다.")
+    if response_model is SemesterReviewDraft:
+        return SemesterReviewDraft(
+            grades_review="이 학기 성적 평가입니다.",
+            reading_review="이 학기 독서 평가입니다.",
+            activities_review="이 학기 활동 평가입니다.",
+        )
+    if response_model is CareerThreadDraft:
+        return FAKE_CAREER_THREAD
+    if response_model is OverallAssessmentDraft:
+        return OverallAssessmentDraft(
+            strengths=["강점1"], weaknesses=["약점1"], unrecorded_points=["기록되지 않은 것1"]
+        )
     raise AssertionError(f"unexpected response_model: {response_model}")
 
 
@@ -77,6 +75,21 @@ async def test_pre_questions_returns_questions_before_first_diagnosis(
 
 
 async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str, str]) -> None:
+    # 성적 추이 섹션은 LLM 없이 원자료를 그대로 재구성하므로, 실제로 그렇게
+    # 동작하는지 확인하려면 academic_performance가 있어야 한다.
+    await client.post(
+        "/api/v1/academic-performance",
+        json={
+            "grade": 1,
+            "semester": 1,
+            "category": "수학",
+            "subject": "수학",
+            "achievement_grade": "A",
+            "raw_score": 95,
+        },
+        headers=auth_headers,
+    )
+
     answers_response = await client.post(
         "/api/v1/diagnosis/pre-questions/answers",
         headers=auth_headers,
@@ -97,13 +110,45 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     assert result_response.status_code == 200
     body = result_response.json()
     assert body["status"] == "done"
-    assert body["overall_summary"] == "종합 요약입니다."
+
+    # 성적 추이 — LLM 없이 원자료에서 직접 계산된 값이어야 한다.
+    assert body["grades_trend"]["subjects"][0]["subject"] == "수학"
+    assert body["grades_trend"]["subjects"][0]["points"][0]["raw_score"] == 95
+    assert body["grades_trend"]["overall"][0]["average_raw_score"] == 95
+
+    # 학기별 평가 — 3개의 독립된 텍스트로 나뉘어 저장된다.
+    review = body["semester_reviews"][0]
+    assert review["grade"] == 1 and review["semester"] == 1
+    assert review["grades_review"] == "이 학기 성적 평가입니다."
+    assert review["reading_review"] == "이 학기 독서 평가입니다."
+    assert review["activities_review"] == "이 학기 활동 평가입니다."
+
+    # 진로 유기적 평가
     assert body["career_thread"][0]["theme"] == "테스트 활동"
-    # 4단계 — 구조화 필드와 별개로 챗봇 말투 리포트도 함께 저장/반환된다.
-    assert body["narrative_report"] == "챗봇 말투로 풀어쓴 리포트입니다."
+
+    # 종합 평가 — 장점/단점/기록되지 않은 것 3개 필드.
+    assert body["strengths"] == ["강점1"]
+    assert body["weaknesses"] == ["약점1"]
+    assert body["unrecorded_points"] == ["기록되지 않은 것1"]
 
     latest_response = await client.get("/api/v1/diagnosis/latest", headers=auth_headers)
     assert latest_response.json()["diagnosis_id"] == diagnosis_id
+
+
+async def test_diagnosis_works_without_any_seteuk_data(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """생기부를 아예 안 올린 사용자도 진단이 실패하지 않아야 한다 — 종합 평가는
+    학기별 평가/진로 사슬이 비어 있어도 예외 없이 호출된다."""
+    create_response = await client.post("/api/v1/diagnosis", headers=auth_headers)
+    diagnosis_id = create_response.json()["diagnosis_id"]
+
+    result_response = await client.get(f"/api/v1/diagnosis/{diagnosis_id}", headers=auth_headers)
+    body = result_response.json()
+    assert body["status"] == "done"
+    assert body["semester_reviews"] == []
+    assert body["grades_trend"] == {"subjects": [], "overall": []}
+    assert body["strengths"] == ["강점1"]
 
 
 async def test_pre_questions_empty_after_first_diagnosis(

@@ -64,7 +64,7 @@
 | `activities` | …, **parent_activity_id**, grade, semester, activity_category, subject, activity_name, activity_type, role, description, keywords, source_block, parsing_confidence | 활동 계보의 기록 쪽 절반 |
 | `plan_items` | id, user_id, item_type, title, description, subject, target_grade, target_semester, due_date, status, origin, source_activity_id, source_recommendation_id, completed_activity_id, completed_reading_id, keywords | 미래 계획 / 로드맵 |
 | `student_interests` | id, user_id, field_key, value(JSONB), answered_at, updated_at | 챗봇의 장기 메모리 |
-| `diagnoses` | id, user_id, status, failure_reason, semester_summaries, domain_feedback, career_thread, overall_summary, strengths, weaknesses, career_gap_analysis, keyword_map | |
+| `diagnoses` | id, user_id, status, failure_reason, grades_trend, semester_reviews, career_thread, strengths, weaknesses, unrecorded_points | 서로 독립적으로 계산되는 섹션들 — §3.4 참고 |
 | `recommendations` | id, user_id, source_activity_id, desired_activity_type, options(JSONB) | 기능2 |
 | `conversations` | id, user_id, title, created_at, updated_at | |
 | `messages` | id, conversation_id, role, content, mode, applied_actions(JSONB) | |
@@ -187,24 +187,45 @@ PDF 원본은 저장하지 않는다.
 ```json
 {
   "diagnosis_id": "uuid", "status": "done",
-  "semester_summaries": [{ "grade": 2, "semester": 1, "summary": "…",
-                           "standout_activities": ["…"] }],
-  "domain_feedback": [{ "domain": "성적", "feedback": "…" }],
+  "grades_trend": {
+    "subjects": [{ "subject": "수학Ⅰ", "category": "수학",
+                   "points": [{ "grade": 2, "semester": 1, "achievement_grade": "A",
+                                "raw_score": 96, "subject_average": 78.4,
+                                "std_deviation": 12.1, "rank": "2" }] }],
+    "overall": [{ "grade": 2, "semester": 1, "average_raw_score": 88.2, "subject_count": 8 }]
+  },
+  "semester_reviews": [{ "grade": 2, "semester": 1,
+                         "grades_review": "…", "reading_review": "…",
+                         "activities_review": "…" }],
   "career_thread": [{ "grade": 1, "semester": 1, "type": "completed",
                       "theme": "…", "source": "…", "connection": "…" }],
-  "overall_summary": "…", "strengths": ["…"], "weaknesses": ["…"],
-  "career_gap_analysis": "…", "keyword_map": ["…"],
-  "narrative_report": "…"
+  "strengths": ["…"], "weaknesses": ["…"], "unrecorded_points": ["…"]
 }
 ```
-`narrative_report`는 위 구조화 필드를 그대로 나열하지 않고 챗봇과 같은 목소리로
-하나의 글로 엮은 리포트다(소제목·목록 없이 5~10개 문단). 3단계(종합) 결과만
-입력받는 4단계 LLM 호출로 진단당 1회만 생성되어 `diagnoses.narrative_report`에
-저장되므로, 조회할 때마다 다시 호출하지 않고 같은 문구를 돌려준다. `status`가
-`done`이 아니면 `null`이다. 클라이언트가 "진단 결과" 화면에 보여줄 기본 리포트는
-이 필드이고, `overall_summary`/`strengths`/`weaknesses`/`career_thread` 등은 그
-리포트를 만든 재료이자 다른 화면(예: 강점/약점 카드, 진로 타임라인)에서 구조화된
-채로 쓰기 위해 함께 남겨둔 것이다.
+
+진단은 생기부 입력만으로는 알 수 없는, 분석이 있어야 드러나는 내용을 저장하는
+단계다. 이 응답은 그 저장된 내용을 보여줄 뿐이며, 서로 독립적으로 계산된
+섹션들로 구성된다 — 하나의 LLM 호출로 전부를 종합하면 근거 없이 추상적으로
+흐르기 쉽기 때문에, 각 섹션은 좁은 범위의 실제 데이터만 입력받아 그것을 읽기
+좋은 형태로 옮기는 역할만 한다("LLM은 번역기, 저자가 아니다").
+
+- **`grades_trend`** — LLM을 거치지 않는 순수 데이터. `academic_performance`
+  원자료를 과목별 시계열(`subjects`)과 학기별 평균(`overall`)으로 재구성만 한
+  것이라, 프론트가 그래프 라이브러리에 그대로 먹여 그리면 된다.
+- **`semester_reviews`** — 학기당 1회 LLM 호출. **그 학기의** 성적/독서/활동
+  원자료만 입력받아 세 개의 독립된 텍스트로 낸다. 자료가 없는 측면은 억지로
+  채우지 않고 정직하게 "기록이 없다"고 쓴다.
+- **`career_thread`** — 활동 전체(계보 `parent_activity_id` 포함) + 수상 + 봉사를
+  함께 입력받는 1회 호출. 진로 관점에서 의미 있는 것만 사슬에 올리므로(중요하지
+  않은 건 자동으로 빠짐), 활동뿐 아니라 수상·봉사도 노드가 될 수 있다. 과거
+  (`completed`)와 학생의 현재 학년-학기 이후 제안(`suggested`)이 학년-학기 순으로
+  한 배열에 담긴다.
+- **`strengths` / `weaknesses` / `unrecorded_points`** — 종합 평가, 1회 호출.
+  **원본 데이터가 아니라 `semester_reviews`와 `career_thread`의 결과만** 입력받아
+  생성된다. `unrecorded_points`는 이 진로 방향이라면 있어야 할 텐데 지금까지
+  기록에 없는 것들이다.
+
+`status`가 `done`이 아니면 모든 섹션이 빈 배열/`null`이다.
 
 ### 3.5 탭 관리 — 출결 / 성적 / 독서 / 수상 / 봉사 / 활동
 

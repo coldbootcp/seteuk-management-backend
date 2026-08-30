@@ -115,12 +115,10 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
         "memory": interests,
         "diagnosis": (
             {
-                "overall_summary": diagnosis.overall_summary,
                 "strengths": diagnosis.strengths,
                 "weaknesses": diagnosis.weaknesses,
-                "career_gap_analysis": diagnosis.career_gap_analysis,
+                "unrecorded_points": diagnosis.unrecorded_points,
                 "career_thread": diagnosis.career_thread,
-                "keyword_map": diagnosis.keyword_map,
                 "created_at": diagnosis.created_at.isoformat(),
             }
             if diagnosis
