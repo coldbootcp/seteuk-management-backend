@@ -131,6 +131,85 @@ async def get_career_thread_material(db: AsyncSession, user_id: uuid.UUID) -> di
     }
 
 
+async def get_activities_by_grade(
+    db: AsyncSession, user_id: uuid.UUID
+) -> dict[int, list[Activity]]:
+    """활동 인벤토리 섹션의 배치 단위. 165개 같은 대량 활동을 한 호출에 몰아넣으면
+    출력이 잘릴 위험이 있어 학년 단위로 나눠 호출한다."""
+    activities = list(
+        await db.scalars(
+            select(Activity)
+            .where(Activity.user_id == user_id)
+            .order_by(Activity.grade, Activity.semester)
+        )
+    )
+    by_grade: dict[int, list[Activity]] = defaultdict(list)
+    for activity in activities:
+        by_grade[activity.grade].append(activity)
+    return dict(by_grade)
+
+
+@dataclass
+class FusionCandidate:
+    """지식 그래프 섹션의 후보 쌍. 이미 parent_activity_id로 이어진 쌍은 진로
+    유기적 평가가 이미 다루므로 후보에서 뺀다."""
+
+    activity_a: Activity
+    activity_b: Activity
+    shared_keywords: list[str]
+    same_subject: bool
+
+    def to_prompt_json(self) -> dict[str, Any]:
+        def _brief(activity: Activity) -> dict[str, Any]:
+            description = activity.description or ""
+            return {
+                "id": str(activity.id),
+                "grade": activity.grade,
+                "semester": activity.semester,
+                "subject": activity.subject,
+                "activity_name": activity.activity_name,
+                "description": description[:150],
+                "keywords": activity.keywords,
+            }
+
+        return {
+            "activity_a": _brief(self.activity_a),
+            "activity_b": _brief(self.activity_b),
+            "shared_keywords": self.shared_keywords,
+            "same_subject": self.same_subject,
+        }
+
+
+def generate_fusion_candidates(
+    activities: list[Activity], max_candidates: int = 60
+) -> list[FusionCandidate]:
+    """과목/키워드 겹침으로 후보 쌍을 결정론적으로 추린다 — LLM은 이 후보들 중
+    실제로 의미 있는 것만 확정하고 라벨을 붙이는 역할만 한다."""
+    linked_pairs = {
+        frozenset({a.id, a.parent_activity_id}) for a in activities if a.parent_activity_id
+    }
+
+    candidates: list[FusionCandidate] = []
+    for i, a in enumerate(activities):
+        for b in activities[i + 1 :]:
+            if frozenset({a.id, b.id}) in linked_pairs:
+                continue
+            same_subject = (
+                bool(a.subject)
+                and a.subject == b.subject
+                and (a.grade, a.semester or 0) != (b.grade, b.semester or 0)
+            )
+            shared = sorted(set(a.keywords) & set(b.keywords))
+            if not same_subject and not shared:
+                continue
+            candidates.append(FusionCandidate(a, b, shared, same_subject))
+
+    candidates.sort(
+        key=lambda c: len(c.shared_keywords) + (2 if c.same_subject else 0), reverse=True
+    )
+    return candidates[:max_candidates]
+
+
 async def compute_grades_trend(db: AsyncSession, user_id: uuid.UUID) -> GradesTrend:
     """성적 추이 섹션 — LLM을 거치지 않는다. 원자료를 과목별 시계열과 학기별
     평균으로 재구성만 한다."""

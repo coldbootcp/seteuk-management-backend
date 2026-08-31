@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -44,13 +44,24 @@ class Diagnosis(Base):
     # 관점에서 의미 있는 것만 사슬로 엮는다(중요하지 않은 건 자동으로 빠진다).
     # 과거(completed)+미래(suggested)가 학년-학기 순으로 하나의 배열에 담긴다.
     career_thread: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 활동 인벤토리 — 진로 유기적 평가와 달리 필터링하지 않고 전량을 역량 축
+    # (전공관련교과역량/진로역량/공동체역량)으로 분류한다. 학년 단위로 배치 호출됨.
+    activity_inventory: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 지식 그래프 — 과목/키워드 겹침으로 추린 후보 쌍 중 LLM이 실제로 의미 있다고
+    # 확정한 것만 담긴다(수직적 심화 / 수평적 융합).
+    knowledge_graph_links: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
-    # 종합 평가 — semester_reviews와 career_thread의 "결과"만 입력받아 생성된다
-    # (원본 데이터 재조회 없음). unrecorded_points는 이 진로라면 있어야 하는데
-    # 아직 기록에 없는 것들.
+    # 종합 평가(SWOT) — semester_reviews/career_thread/activity_inventory의
+    # "결과"만 입력받아 생성된다(원본 데이터 재조회 없음).
     strengths: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     weaknesses: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    unrecorded_points: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 아직 기록에 없지만 남은 기간에 채우면 강점이 될 수 있는 것.
+    opportunities: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 외부 입시 환경(그런 데이터가 없다)이 아니라, 반복되거나 악화되는 내부
+    # 패턴 — 방치하면 굳어질 위험 신호.
+    threats: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # SWOT 중 가장 시급한 것 하나를 짚는 1~3문장.
+    headline_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

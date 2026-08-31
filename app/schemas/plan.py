@@ -112,3 +112,37 @@ class RoadmapDraft(BaseModel):
 class RoadmapResponse(BaseModel):
     semesters: list[RoadmapSemester]
     created_plan_items: list[PlanItemRead]
+
+
+# --- 3개년 그랜드 로드맵 조립 — 새 LLM 호출 없이, 이미 있는 진단(career_thread)과
+# 계획(plan_items)을 과거/현재/미래 마일스톤 형태로 재배치만 한다. ---
+
+
+class RoadmapOverviewPast(BaseModel):
+    grade: int = Field(ge=1, le=3)
+    # 그 학년의 career_thread completed 노드 theme들을 이어 붙인 한 줄 요약.
+    summary: str
+    themes: list[str]
+
+
+class RoadmapOverviewCurrent(BaseModel):
+    grade: int | None
+    semester: int | None
+    # 진단 종합 평가(SWOT)의 headline_comment를 그대로 재사용 — 가장 시급한 것 하나.
+    headline_comment: str | None
+    weaknesses: list[str]
+
+
+class RoadmapOverviewFutureMilestone(BaseModel):
+    grade: int = Field(ge=1, le=3)
+    semester: int = Field(ge=1, le=2)
+    # career_thread suggested 노드가 있으면 그 theme, 없으면 null.
+    theme: str | None
+    # 그 학기에 배정된 계획 제목들(plan_items).
+    plan_titles: list[str]
+
+
+class RoadmapOverview(BaseModel):
+    past: list[RoadmapOverviewPast]
+    current: RoadmapOverviewCurrent
+    future: list[RoadmapOverviewFutureMilestone]

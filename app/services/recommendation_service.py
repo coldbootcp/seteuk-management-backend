@@ -82,7 +82,8 @@ async def create_follow_up(
                 {
                     "strengths": diagnosis.strengths,
                     "weaknesses": diagnosis.weaknesses,
-                    "unrecorded_points": diagnosis.unrecorded_points,
+                    "opportunities": diagnosis.opportunities,
+                    "threats": diagnosis.threats,
                 }
                 if diagnosis
                 else None

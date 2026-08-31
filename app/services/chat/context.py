@@ -117,7 +117,8 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             {
                 "strengths": diagnosis.strengths,
                 "weaknesses": diagnosis.weaknesses,
-                "unrecorded_points": diagnosis.unrecorded_points,
+                "opportunities": diagnosis.opportunities,
+                "threats": diagnosis.threats,
                 "career_thread": diagnosis.career_thread,
                 "created_at": diagnosis.created_at.isoformat(),
             }

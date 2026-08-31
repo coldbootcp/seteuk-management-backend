@@ -64,7 +64,7 @@
 | `activities` | …, **parent_activity_id**, grade, semester, activity_category, subject, activity_name, activity_type, role, description, keywords, source_block, parsing_confidence | 활동 계보의 기록 쪽 절반 |
 | `plan_items` | id, user_id, item_type, title, description, subject, target_grade, target_semester, due_date, status, origin, source_activity_id, source_recommendation_id, completed_activity_id, completed_reading_id, keywords | 미래 계획 / 로드맵 |
 | `student_interests` | id, user_id, field_key, value(JSONB), answered_at, updated_at | 챗봇의 장기 메모리 |
-| `diagnoses` | id, user_id, status, failure_reason, grades_trend, semester_reviews, career_thread, strengths, weaknesses, unrecorded_points | 서로 독립적으로 계산되는 섹션들 — §3.4 참고 |
+| `diagnoses` | id, user_id, status, failure_reason, grades_trend, semester_reviews, career_thread, activity_inventory, knowledge_graph_links, strengths, weaknesses, opportunities, threats, headline_comment | 서로 독립적으로 계산되는 섹션들 — §3.4 참고 |
 | `recommendations` | id, user_id, source_activity_id, desired_activity_type, options(JSONB) | 기능2 |
 | `conversations` | id, user_id, title, created_at, updated_at | |
 | `messages` | id, conversation_id, role, content, mode, applied_actions(JSONB) | |
@@ -199,7 +199,14 @@ PDF 원본은 저장하지 않는다.
                          "activities_review": "…" }],
   "career_thread": [{ "grade": 1, "semester": 1, "type": "completed",
                       "theme": "…", "source": "…", "connection": "…" }],
-  "strengths": ["…"], "weaknesses": ["…"], "unrecorded_points": ["…"]
+  "activity_inventory": [{ "activity_id": "uuid", "grade": 2, "semester": 1,
+                           "competency": "전공관련교과역량", "depth_level": "심화탐구",
+                           "headline": "베벨기어 설계 및 발표" }],
+  "knowledge_graph_links": [{ "from_activity_id": "uuid", "to_activity_id": "uuid",
+                              "link_type": "vertical",
+                              "relation_label": "지수함수 모델의 실측 데이터 검증" }],
+  "strengths": ["…"], "weaknesses": ["…"], "opportunities": ["…"], "threats": ["…"],
+  "headline_comment": "…"
 }
 ```
 
@@ -220,12 +227,30 @@ PDF 원본은 저장하지 않는다.
   않은 건 자동으로 빠짐), 활동뿐 아니라 수상·봉사도 노드가 될 수 있다. 과거
   (`completed`)와 학생의 현재 학년-학기 이후 제안(`suggested`)이 학년-학기 순으로
   한 배열에 담긴다.
-- **`strengths` / `weaknesses` / `unrecorded_points`** — 종합 평가, 1회 호출.
-  **원본 데이터가 아니라 `semester_reviews`와 `career_thread`의 결과만** 입력받아
-  생성된다. `unrecorded_points`는 이 진로 방향이라면 있어야 할 텐데 지금까지
-  기록에 없는 것들이다.
+- **`activity_inventory`** — 학년 단위 배치 LLM 호출(활동이 많으면 출력이 잘릴
+  위험이 있어 학년마다 나눠 부른다). `career_thread`와 달리 **필터링하지 않고
+  전량**을 `competency`(전공관련교과역량/진로역량/공동체역량)와
+  `depth_level`(단순참여/탐구시도/심화탐구)로 분류한다. 프론트는 학년-학기 ×
+  역량 매트릭스에 카드로 배치하면 된다.
+- **`knowledge_graph_links`** — 과목/키워드가 겹치는 활동 쌍을 결정론적으로 먼저
+  추리고(이미 `parent_activity_id`로 이어진 쌍은 제외), 그 후보 중 실제로 의미
+  있다고 LLM이 확정한 것만 담긴다. `link_type`은 같은 주제가 학년이 오르며
+  깊어진 `vertical`, 서로 다른 과목이 하나의 결과로 결합한 `horizontal` 중
+  하나. `relation_label`이 그 융합의 핵심 테마를 짧게 설명한다.
+- **`strengths` / `weaknesses` / `opportunities` / `threats` / `headline_comment`**
+  — 종합 평가(SWOT), 1회 호출. **원본 데이터가 아니라 `semester_reviews` /
+  `career_thread` / `activity_inventory`의 결과만** 입력받아 생성된다.
+  일반적인 경영 SWOT과 달리 이 서비스에는 "외부 입시 환경" 데이터가 없으므로,
+  `opportunities`는 "아직 기록에 없지만 남은 기간에 채우면 강점이 될 수 있는
+  것", `threats`는 "학기를 거듭해도 반복되거나 악화되는 내부 패턴"으로 이
+  맥락에 맞게 재정의했다. `headline_comment`는 넷 중 가장 시급한 것 하나를
+  1~3문장으로 짚는다.
 
 `status`가 `done`이 아니면 모든 섹션이 빈 배열/`null`이다.
+
+> **대학 적합도/전형 추천은 의도적으로 제외했다.** 실제 대학별 내신 산출식·
+> 커트라인·전형 요강 데이터가 없는 상태에서 만들면 LLM이 그럴듯한 대학명과
+> 점수를 지어내게 된다 — 실제 데이터를 확보하기 전까지는 넣지 않는다.
 
 ### 3.5 탭 관리 — 출결 / 성적 / 독서 / 수상 / 봉사 / 활동
 
@@ -309,6 +334,26 @@ PDF 원본은 저장하지 않는다.
 현재 학기 **다음**부터 목표 학기까지가 대상이다. `replace_existing`이 true여도
 지워지는 것은 **대상 구간의 손대지 않은(`planned`) AI 로드맵 항목뿐**이며, 학생이
 직접 세웠거나 이미 진행 중인 계획은 유지된다.
+
+**GET /plans/roadmap-overview** → 200
+```json
+{
+  "past": [{ "grade": 1, "summary": "기초 다지기 → 로봇 입문",
+             "themes": ["기초 다지기", "로봇 입문"] }],
+  "current": { "grade": 2, "semester": 1,
+               "headline_comment": "가장 시급한 것은 독서 기록 부족입니다.",
+               "weaknesses": ["…"] },
+  "future": [{ "grade": 2, "semester": 2, "theme": "SIR 모델 심화",
+               "plan_titles": ["SIR 모델 시뮬레이션"] }]
+}
+```
+**새 LLM 호출이 없다.** 이미 있는 진단(`career_thread`, `headline_comment`,
+`weaknesses`)과 계획(`plan_items`)을 과거/현재/미래 마일스톤 형태로 재배치만
+한다 — `past`는 완료(`completed`) 노드를 학년별로 묶은 것, `current`는 사용자의
+현재 학년-학기와 진단의 가장 시급한 지적, `future`는 제안(`suggested`) 노드의
+테마와 그 학기에 이미 세워둔 계획 제목을 합친 것이다. 진단을 아직 안 돌렸으면
+`past`가 비고 `current.headline_comment`가 `null`일 뿐, 계획만으로도 `future`는
+채워진다.
 
 ### 3.7 후속 탐구 추천 (기능2)
 

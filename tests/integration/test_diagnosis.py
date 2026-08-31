@@ -1,11 +1,15 @@
+import json
+
 import pytest
 from httpx import AsyncClient
 
 import app.services.diagnosis.pipeline as pipeline
 import app.services.diagnosis_service as diagnosis_service
 from app.schemas.diagnosis import (
+    ActivityInventoryDraft,
     CareerThreadDraft,
     ExtractedInterestsResult,
+    KnowledgeGraphDraft,
     OverallAssessmentDraft,
     PreQuestion,
     PreQuestionsResponse,
@@ -46,9 +50,43 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
         )
     if response_model is CareerThreadDraft:
         return FAKE_CAREER_THREAD
+    if response_model is ActivityInventoryDraft:
+        # 배치(학년)에 실제로 들어온 활동 id를 그대로 돌려줘야 pipeline의
+        # known_ids 검증을 통과한다.
+        payload = json.loads(user_content)
+        return ActivityInventoryDraft(
+            entries=[
+                {
+                    "activity_id": a["id"],
+                    "grade": a["grade"],
+                    "semester": a["semester"],
+                    "competency": "전공관련교과역량",
+                    "depth_level": "탐구시도",
+                    "headline": f"{a['activity_name']} 요약",
+                }
+                for a in payload["activities"]
+            ]
+        )
+    if response_model is KnowledgeGraphDraft:
+        payload = json.loads(user_content)
+        return KnowledgeGraphDraft(
+            links=[
+                {
+                    "from_activity_id": c["activity_a"]["id"],
+                    "to_activity_id": c["activity_b"]["id"],
+                    "link_type": "vertical" if c["same_subject"] else "horizontal",
+                    "relation_label": "테스트 융합",
+                }
+                for c in payload["candidates"]
+            ]
+        )
     if response_model is OverallAssessmentDraft:
         return OverallAssessmentDraft(
-            strengths=["강점1"], weaknesses=["약점1"], unrecorded_points=["기록되지 않은 것1"]
+            strengths=["강점1"],
+            weaknesses=["약점1"],
+            opportunities=["기회1"],
+            threats=["위협1"],
+            headline_comment="가장 시급한 것은 기회1입니다.",
         )
     raise AssertionError(f"unexpected response_model: {response_model}")
 
@@ -90,6 +128,41 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
         headers=auth_headers,
     )
 
+    # 같은 과목·다른 학기 활동 두 개 — 지식 그래프 후보(같은 과목 심화)가
+    # 결정론적으로 하나는 생기도록 만든다.
+    activity_a = (
+        await client.post(
+            "/api/v1/activities",
+            json={
+                "grade": 1,
+                "semester": 1,
+                "activity_category": "과목세부특기사항",
+                "subject": "수학",
+                "activity_name": "지수함수 기초 탐구",
+                "activity_type": "report",
+                "description": "지수함수의 기본 성질을 탐구함.",
+                "keywords": ["로봇"],
+            },
+            headers=auth_headers,
+        )
+    ).json()
+    activity_b = (
+        await client.post(
+            "/api/v1/activities",
+            json={
+                "grade": 2,
+                "semester": 1,
+                "activity_category": "과목세부특기사항",
+                "subject": "수학",
+                "activity_name": "로지스틱 함수 심화 탐구",
+                "activity_type": "report",
+                "description": "지수함수의 한계를 로지스틱 함수로 보완함.",
+                "keywords": ["로봇"],
+            },
+            headers=auth_headers,
+        )
+    ).json()
+
     answers_response = await client.post(
         "/api/v1/diagnosis/pre-questions/answers",
         headers=auth_headers,
@@ -126,10 +199,26 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     # 진로 유기적 평가
     assert body["career_thread"][0]["theme"] == "테스트 활동"
 
-    # 종합 평가 — 장점/단점/기록되지 않은 것 3개 필드.
+    # 활동 인벤토리 — 필터링 없이 활동 2개 전량에 분류가 매겨진다.
+    inventory_ids = {e["activity_id"] for e in body["activity_inventory"]}
+    assert inventory_ids == {activity_a["id"], activity_b["id"]}
+    assert all(e["competency"] == "전공관련교과역량" for e in body["activity_inventory"])
+
+    # 지식 그래프 — 같은 과목·다른 학기라 후보가 하나 잡히고 vertical로 확정된다.
+    assert len(body["knowledge_graph_links"]) == 1
+    link = body["knowledge_graph_links"][0]
+    assert {link["from_activity_id"], link["to_activity_id"]} == {
+        activity_a["id"],
+        activity_b["id"],
+    }
+    assert link["link_type"] == "vertical"
+
+    # 종합 평가(SWOT) — 4개의 독립 필드 + 헤드라인.
     assert body["strengths"] == ["강점1"]
     assert body["weaknesses"] == ["약점1"]
-    assert body["unrecorded_points"] == ["기록되지 않은 것1"]
+    assert body["opportunities"] == ["기회1"]
+    assert body["threats"] == ["위협1"]
+    assert body["headline_comment"] == "가장 시급한 것은 기회1입니다."
 
     latest_response = await client.get("/api/v1/diagnosis/latest", headers=auth_headers)
     assert latest_response.json()["diagnosis_id"] == diagnosis_id
@@ -139,7 +228,7 @@ async def test_diagnosis_works_without_any_seteuk_data(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     """생기부를 아예 안 올린 사용자도 진단이 실패하지 않아야 한다 — 종합 평가는
-    학기별 평가/진로 사슬이 비어 있어도 예외 없이 호출된다."""
+    학기별 평가/진로 사슬/활동 인벤토리가 비어 있어도 예외 없이 호출된다."""
     create_response = await client.post("/api/v1/diagnosis", headers=auth_headers)
     diagnosis_id = create_response.json()["diagnosis_id"]
 
@@ -148,6 +237,8 @@ async def test_diagnosis_works_without_any_seteuk_data(
     assert body["status"] == "done"
     assert body["semester_reviews"] == []
     assert body["grades_trend"] == {"subjects": [], "overall": []}
+    assert body["activity_inventory"] == []
+    assert body["knowledge_graph_links"] == []
     assert body["strengths"] == ["강점1"]
 
 

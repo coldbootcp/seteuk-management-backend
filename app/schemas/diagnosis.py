@@ -82,6 +82,28 @@ class CareerThreadEntry(BaseModel):
     connection: str
 
 
+# --- 활동 인벤토리 섹션 — 활동을 역량 축으로 분류(필터링 없음, 전량 커버 목표) ---
+
+
+class ActivityInventoryEntry(BaseModel):
+    activity_id: UUID
+    grade: int
+    semester: int | None
+    competency: Literal["전공관련교과역량", "진로역량", "공동체역량"]
+    depth_level: Literal["단순참여", "탐구시도", "심화탐구"]
+    headline: str
+
+
+# --- 지식 그래프 섹션 — 과목/키워드 겹침으로 추린 후보 중 LLM이 확정한 융합 링크 ---
+
+
+class KnowledgeGraphLink(BaseModel):
+    from_activity_id: UUID
+    to_activity_id: UUID
+    link_type: Literal["vertical", "horizontal"]
+    relation_label: str
+
+
 class DiagnosisCreateResponse(BaseModel):
     diagnosis_id: UUID
     status: DiagnosisStatus
@@ -98,12 +120,21 @@ class DiagnosisResult(BaseModel):
     grades_trend: GradesTrend | None = None
     semester_reviews: list[SemesterReview] = []
     career_thread: list[CareerThreadEntry] = []
-    # 종합 평가 — semester_reviews와 career_thread의 결과만 입력받아 생성된다
-    # (원본 데이터 재조회 없음). unrecorded_points는 "지금까지 기록되지 않았지만
-    # 이 진로라면 있어야 할 것들"이다.
+    activity_inventory: list[ActivityInventoryEntry] = []
+    knowledge_graph_links: list[KnowledgeGraphLink] = []
+    # 종합 평가 — semester_reviews/career_thread/activity_inventory의 결과만
+    # 입력받아 생성된다(원본 데이터 재조회 없음).
+    #   strengths/weaknesses: 이미 드러난 내부 강점/약점.
+    #   opportunities: 아직 기록에 없지만 남은 기간에 채우면 강점이 될 수 있는 것.
+    #   threats: 외부 입시 환경이 아니라(그런 데이터가 없다) 반복되거나 악화되는
+    #     내부 패턴 — 방치하면 굳어질 위험 신호.
     strengths: list[str] = []
     weaknesses: list[str] = []
-    unrecorded_points: list[str] = []
+    opportunities: list[str] = []
+    threats: list[str] = []
+    # SWOT 중 가장 시급한 것 하나를 짚는 1~3문장 — 새 사실을 지어내지 않고
+    # 위 SWOT 항목 중 하나를 근거로 든다.
+    headline_comment: str | None = None
 
 
 # --- Internal pipeline models (LLM structured-output targets, not exposed via API) ---
@@ -121,12 +152,27 @@ class CareerThreadDraft(BaseModel):
     career_thread: list[CareerThreadEntry]
 
 
+class ActivityInventoryDraft(BaseModel):
+    """활동 인벤토리 산출물 — 배치 하나(보통 학년 단위)에 대한 분류 결과."""
+
+    entries: list[ActivityInventoryEntry]
+
+
+class KnowledgeGraphDraft(BaseModel):
+    """지식 그래프 산출물 — 후보 쌍 중 실제로 의미 있다고 확정된 것만 담김."""
+
+    links: list[KnowledgeGraphLink]
+
+
 class OverallAssessmentDraft(BaseModel):
-    """종합 평가 산출물 — semester_reviews/career_thread만 입력받아 생성된다."""
+    """종합 평가 산출물 — semester_reviews/career_thread/activity_inventory만
+    입력받아 생성된다."""
 
     strengths: list[str]
     weaknesses: list[str]
-    unrecorded_points: list[str]
+    opportunities: list[str]
+    threats: list[str]
+    headline_comment: str
 
 
 class ExtractedInterest(BaseModel):

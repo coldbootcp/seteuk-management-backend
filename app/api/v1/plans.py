@@ -18,6 +18,7 @@ from app.schemas.plan import (
     PlanItemRead,
     PlanItemUpdate,
     RoadmapGenerateRequest,
+    RoadmapOverview,
     RoadmapResponse,
 )
 from app.schemas.records import ListResponse
@@ -82,6 +83,17 @@ async def generate_roadmap(
         semesters=semesters,
         created_plan_items=[PlanItemRead.model_validate(p) for p in created],
     )
+
+
+@router.get("/roadmap-overview", response_model=RoadmapOverview)
+async def get_roadmap_overview(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RoadmapOverview:
+    """3개년 그랜드 로드맵 — 새 LLM 호출 없이, 이미 있는 진단과 계획을
+    과거/현재/미래 마일스톤으로 재배치만 한다. /plans/{plan_id}보다 먼저 등록해야
+    "roadmap-overview"가 plan_id로 잘못 매칭되지 않는다."""
+    return await plan_service.get_roadmap_overview(db, user)
 
 
 @router.get("/{plan_id}", response_model=PlanItemRead)

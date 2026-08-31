@@ -53,15 +53,28 @@ async def run_diagnosis_job(diagnosis_id: uuid.UUID, user_id: uuid.UUID) -> None
 
         try:
             interests = await get_current_interests(db, user_id)
-            grades_trend, semester_reviews, career_thread, overall = (
-                await pipeline.run_diagnosis_pipeline(db, user_id, interests)
-            )
+            (
+                grades_trend,
+                semester_reviews,
+                career_thread,
+                activity_inventory,
+                knowledge_graph_links,
+                overall,
+            ) = await pipeline.run_diagnosis_pipeline(db, user_id, interests)
             diagnosis.grades_trend = grades_trend.model_dump(mode="json")
             diagnosis.semester_reviews = [s.model_dump(mode="json") for s in semester_reviews]
             diagnosis.career_thread = [t.model_dump(mode="json") for t in career_thread]
+            diagnosis.activity_inventory = [
+                e.model_dump(mode="json") for e in activity_inventory
+            ]
+            diagnosis.knowledge_graph_links = [
+                link.model_dump(mode="json") for link in knowledge_graph_links
+            ]
             diagnosis.strengths = overall.strengths
             diagnosis.weaknesses = overall.weaknesses
-            diagnosis.unrecorded_points = overall.unrecorded_points
+            diagnosis.opportunities = overall.opportunities
+            diagnosis.threats = overall.threats
+            diagnosis.headline_comment = overall.headline_comment
             diagnosis.status = DiagnosisStatus.DONE.value
         except Exception as exc:
             diagnosis.status = DiagnosisStatus.FAILED.value
@@ -101,7 +114,11 @@ def to_result(diagnosis: Diagnosis) -> DiagnosisResult:
         grades_trend=diagnosis.grades_trend,
         semester_reviews=diagnosis.semester_reviews or [],
         career_thread=diagnosis.career_thread or [],
+        activity_inventory=diagnosis.activity_inventory or [],
+        knowledge_graph_links=diagnosis.knowledge_graph_links or [],
         strengths=diagnosis.strengths or [],
         weaknesses=diagnosis.weaknesses or [],
-        unrecorded_points=diagnosis.unrecorded_points or [],
+        opportunities=diagnosis.opportunities or [],
+        threats=diagnosis.threats or [],
+        headline_comment=diagnosis.headline_comment,
     )

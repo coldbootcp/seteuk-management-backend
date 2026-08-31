@@ -23,6 +23,10 @@ from app.schemas.plan import (
     PlanItemCreate,
     RoadmapDraft,
     RoadmapGenerateRequest,
+    RoadmapOverview,
+    RoadmapOverviewCurrent,
+    RoadmapOverviewFutureMilestone,
+    RoadmapOverviewPast,
     RoadmapSemester,
 )
 from app.services.llm import call_structured
@@ -182,7 +186,8 @@ async def generate_roadmap(
                 {
                     "strengths": diagnosis.strengths,
                     "weaknesses": diagnosis.weaknesses,
-                    "unrecorded_points": diagnosis.unrecorded_points,
+                    "opportunities": diagnosis.opportunities,
+                    "threats": diagnosis.threats,
                     "career_thread": diagnosis.career_thread,
                 }
                 if diagnosis
@@ -260,3 +265,66 @@ async def generate_roadmap(
     for plan in created:
         await db.refresh(plan)
     return kept_semesters, created
+
+
+async def get_roadmap_overview(db: AsyncSession, user: User) -> RoadmapOverview:
+    """3개년 그랜드 로드맵 — 새 LLM 호출 없이, 이미 계산된 진단(career_thread,
+    SWOT)과 계획(plan_items)을 과거/현재/미래 마일스톤 형태로 재배치만 한다.
+    "지금까지 잘해왔고, 지금 이게 아쉬우니, 남은 기간 이렇게 채우면 된다"는
+    내러티브를 학생이 한 화면에서 보게 하는 게 목적이다."""
+    diagnosis = await db.scalar(
+        select(Diagnosis)
+        .where(Diagnosis.user_id == user.id, Diagnosis.status == DiagnosisStatus.DONE.value)
+        .order_by(Diagnosis.created_at.desc())
+        .limit(1)
+    )
+    plans = list(
+        await db.scalars(
+            select(PlanItem).where(
+                PlanItem.user_id == user.id, PlanItem.status != PlanItemStatus.DROPPED.value
+            )
+        )
+    )
+
+    career_thread = diagnosis.career_thread or [] if diagnosis else []
+    completed_nodes = [n for n in career_thread if n["type"] == "completed"]
+    suggested_nodes = [n for n in career_thread if n["type"] == "suggested"]
+
+    past_by_grade: dict[int, list[str]] = {}
+    for node in sorted(completed_nodes, key=lambda n: (n["grade"], n["semester"])):
+        past_by_grade.setdefault(node["grade"], []).append(node["theme"])
+    past = [
+        RoadmapOverviewPast(grade=grade, summary=" → ".join(themes), themes=themes)
+        for grade, themes in sorted(past_by_grade.items())
+    ]
+
+    current = RoadmapOverviewCurrent(
+        grade=user.current_grade,
+        semester=user.current_semester,
+        headline_comment=diagnosis.headline_comment if diagnosis else None,
+        weaknesses=(diagnosis.weaknesses or []) if diagnosis else [],
+    )
+
+    suggested_theme_by_semester: dict[tuple[int, int], str] = {
+        (n["grade"], n["semester"]): n["theme"] for n in suggested_nodes
+    }
+    plan_titles_by_semester: dict[tuple[int, int], list[str]] = {}
+    for plan in plans:
+        if plan.target_grade is None or plan.target_semester is None:
+            continue
+        plan_titles_by_semester.setdefault((plan.target_grade, plan.target_semester), []).append(
+            plan.title
+        )
+
+    future_keys = sorted(set(suggested_theme_by_semester) | set(plan_titles_by_semester))
+    future = [
+        RoadmapOverviewFutureMilestone(
+            grade=grade,
+            semester=semester,
+            theme=suggested_theme_by_semester.get((grade, semester)),
+            plan_titles=plan_titles_by_semester.get((grade, semester), []),
+        )
+        for grade, semester in future_keys
+    ]
+
+    return RoadmapOverview(past=past, current=current, future=future)
