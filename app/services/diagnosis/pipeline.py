@@ -194,17 +194,49 @@ async def _write_knowledge_graph_batch(
         }
         for index, a in index_of_activity.items()
     ]
+    # 활동마다 parent_activity_index를 흩어 놓기만 하면 LLM이 규칙을 흘려보내고
+    # 계보 쌍만 잔뜩 돌려주는 것이 실제로 관측됐다. 제외 대상을 한 곳에 모아
+    # 명시적으로 건네 애초에 후보에서 빠지게 한다(코드 필터는 그대로 둔다 —
+    # 프롬프트는 부탁이고 필터가 보증이다).
+    already_linked = [
+        [index_by_id[a.parent_activity_id], index]
+        for index, a in index_of_activity.items()
+        if a.parent_activity_id is not None and a.parent_activity_id in index_by_id
+    ]
     user_content = json.dumps(
-        {"career_context": interests, "activities": payload}, ensure_ascii=False
+        {
+            "career_context": interests,
+            "activities": payload,
+            "already_linked_pairs": already_linked,
+        },
+        ensure_ascii=False,
     )
     draft = await call_structured(KNOWLEDGE_GRAPH_SYSTEM_PROMPT, user_content, KnowledgeGraphDraft)
 
+    # 이미 parent_activity_id로 이어진 쌍은 진로 유기적 평가·계보 화면이 이미
+    # 다루므로 그래프에 다시 올리지 않는다. 프롬프트에도 같은 규칙을 적어 두었지만
+    # LLM이 실제로 이 지시를 무시하고 계보 쌍만 잔뜩 돌려주는 것이 관측돼(그러면
+    # 그래프가 계보의 중복이 되어 아무 정보도 더하지 못한다), 지어낸 index를
+    # 버리는 것과 같은 방식으로 코드에서 확정적으로 걸러낸다.
+    lineage_pairs = {
+        frozenset({a.id, a.parent_activity_id})
+        for a in activities
+        if a.parent_activity_id is not None
+    }
+
     links: list[KnowledgeGraphLink] = []
+    seen: set[frozenset[uuid.UUID]] = set()
     for draft_link in draft.links:
         from_activity = index_of_activity.get(draft_link.from_index)
         to_activity = index_of_activity.get(draft_link.to_index)
         if from_activity is None or to_activity is None:
             continue
+        if from_activity.id == to_activity.id:
+            continue
+        pair = frozenset({from_activity.id, to_activity.id})
+        if pair in lineage_pairs or pair in seen:
+            continue
+        seen.add(pair)
         links.append(
             KnowledgeGraphLink(
                 from_activity_id=from_activity.id,

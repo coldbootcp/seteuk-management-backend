@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     # 운영에서는 JSON 한 줄, 로컬에서는 사람이 읽는 출력.
     log_json: bool = False
 
+    # 웹 프론트엔드와 API가 서로 다른 오리진에서 도는 구조라(로컬은 3000 vs 8000,
+    # 운영은 별도 도메인) 브라우저가 요청을 보내려면 CORS 허용이 필요하다.
+    # 콤마로 구분된 오리진 목록.
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3100,http://127.0.0.1:3100"
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
     # 하루(24시간 슬라이딩 윈도우) 사용자별 LLM 작업 한도.
     daily_upload_limit: int = 5
     daily_diagnosis_limit: int = 5

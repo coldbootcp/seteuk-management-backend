@@ -85,3 +85,82 @@ async def test_small_activity_set_uses_a_single_call(monkeypatch: pytest.MonkeyP
 
     await pipeline._write_knowledge_graph(activities_by_grade, interests={})
     assert calls == 1
+
+
+async def test_lineage_pairs_are_dropped_even_when_the_llm_returns_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """이미 parent_activity_id로 이어진 쌍은 진로 사슬·계보 화면이 이미 다루므로
+    그래프에 다시 올라오면 안 된다. 프롬프트로도 지시하지만 실제 DeepSeek 응답이
+    이 지시를 무시하고 계보 쌍만 돌려주는 것이 관측됐으므로(그러면 그래프가
+    계보의 중복이 되어 아무 정보도 더하지 못한다) 코드에서 확정적으로 걸러낸다."""
+    root = _activity(1, "버스 데이터 정리")
+    child = _activity(2, "회귀분석으로 확장")
+    child.parent_activity_id = root.id
+    unrelated = _activity(2, "등가속도 오차 분석")
+
+    async def fake_call_structured(system_prompt, user_content, response_model):
+        # LLM이 계보 쌍(1↔2)과 진짜 새 연결(2↔3)을 함께 돌려주는 상황.
+        return KnowledgeGraphDraft(
+            links=[
+                {
+                    "from_index": 1,
+                    "to_index": 2,
+                    "link_type": "vertical",
+                    "relation_label": "계보 중복",
+                },
+                {
+                    "from_index": 2,
+                    "to_index": 1,
+                    "link_type": "vertical",
+                    "relation_label": "방향만 뒤집힌 중복",
+                },
+                {
+                    "from_index": 2,
+                    "to_index": 3,
+                    "link_type": "horizontal",
+                    "relation_label": "오차 개념 접목",
+                },
+            ]
+        )
+
+    monkeypatch.setattr(pipeline, "call_structured", fake_call_structured)
+
+    links = await pipeline._write_knowledge_graph_batch([root, child, unrelated], {})
+
+    assert [link.relation_label for link in links] == ["오차 개념 접목"]
+
+
+async def test_duplicate_and_self_links_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """같은 쌍을 방향만 바꿔 두 번 내거나 자기 자신을 가리키는 응답도 버린다."""
+    a, b = _activity(1, "A"), _activity(2, "B")
+
+    async def fake_call_structured(system_prompt, user_content, response_model):
+        return KnowledgeGraphDraft(
+            links=[
+                {
+                    "from_index": 1,
+                    "to_index": 2,
+                    "link_type": "vertical",
+                    "relation_label": "진짜 연결",
+                },
+                {
+                    "from_index": 2,
+                    "to_index": 1,
+                    "link_type": "vertical",
+                    "relation_label": "같은 쌍 재등장",
+                },
+                {
+                    "from_index": 1,
+                    "to_index": 1,
+                    "link_type": "vertical",
+                    "relation_label": "자기 자신",
+                },
+            ]
+        )
+
+    monkeypatch.setattr(pipeline, "call_structured", fake_call_structured)
+
+    links = await pipeline._write_knowledge_graph_batch([a, b], {})
+
+    assert [link.relation_label for link in links] == ["진짜 연결"]

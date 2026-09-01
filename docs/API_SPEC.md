@@ -253,7 +253,13 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   달라도 명백한 심화다). 대신 활동 전체 목록을 LLM에 통째로 주고 내용을 읽어
   직접 판단하게 한다(이미 `parent_activity_id`로 이어진 쌍은 제외). 활동이
   아주 많으면(현재 임계값 120건) 한 호출에 다 넣지 않고 인접한 두 학년씩 묶어
-  나눠 부른 뒤 중복 링크를 병합한다. `link_type`은 같은 활동 계열이 학년이
+  나눠 부른 뒤 중복 링크를 병합한다. **이미 `parent_activity_id`로 이어진 쌍은
+  응답에 나오지 않는다** — 그 연결은 `career_thread`와 계보 화면이 이미 다루므로
+  그래프에 또 올리면 아무 정보도 더하지 못한다. 프롬프트로도 같은 규칙을 주지만
+  LLM이 이를 무시하고 계보 쌍만 돌려주는 것이 실제로 관측돼, 서비스가 응답을
+  받은 뒤 계보 쌍·자기 자신·방향만 뒤집힌 중복을 확정적으로 걸러낸다(프롬프트는
+  부탁이고 필터가 보증이다). 그래서 이 배열은 **계보에 아직 안 잡힌 숨은 연결만**
+  담으며, 그런 연결이 없으면 빈 배열일 수 있다. `link_type`은 같은 활동 계열이 학년이
   오르며 깊어진 `vertical`, 서로 다른 활동의 방법·소재가 결합한 `horizontal`
   중 하나. `relation_label`이 그 연결의 핵심 내용을 짧게 설명한다.
 - **`strengths` / `weaknesses` / `opportunities` / `threats` / `headline_comment`**
@@ -347,9 +353,14 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 { "semesters": [{ "grade": 2, "semester": 2, "theme": "…", "rationale": "…",
                   "items": [{ "item_type": "activity", "title": "…",
                               "description": "…", "subject": "…",
-                              "keywords": ["…"], "source_activity_id": "uuid 또는 null" }] }],
+                              "keywords": ["…"], "source_activity_index": 3 }] }],
   "created_plan_items": [ … ] }
 ```
+`semesters`는 LLM이 낸 초안 그대로다 — `source_activity_index`는 **그 호출 안에서만
+유효한 정수**이며(LLM에게 UUID를 베끼게 하지 않으려고 쓰는 값), 클라이언트가 해석할
+수 있는 식별자가 아니다. 실제로 어떤 활동에 계보가 붙었는지는 서버가 역참조를 끝낸
+`created_plan_items[].source_activity_id`에서 읽어야 한다.
+
 현재 학기 **다음**부터 목표 학기까지가 대상이다. `replace_existing`이 true여도
 지워지는 것은 **대상 구간의 손대지 않은(`planned`) AI 로드맵 항목뿐**이며, 학생이
 직접 세웠거나 이미 진행 중인 계획은 유지된다.
@@ -498,5 +509,8 @@ data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해�
 - 모든 응답에 `X-Request-ID`가 붙는다. 클라이언트가 같은 헤더로 보내면 그 값을
   이어받아 로그와 대조할 수 있다.
 - 헬스체크: `/health`(프로세스), `/health/ready`(DB 포함 — 배포 헬스체크는 이쪽).
+- 웹 프론트엔드는 API와 다른 오리진에서 돌기 때문에 CORS가 필요하다. 허용 오리진은
+  `CORS_ORIGINS`(콤마 구분)로 설정하며, 인증이 `Authorization` 헤더로만 이뤄지므로
+  쿠키(`allow_credentials`)는 쓰지 않는다.
 - 프로세스가 죽어 `processing`에 멈춘 파싱/진단 job은 서버 기동 시 실패로 확정된다
   (`STALE_JOB_TIMEOUT_MINUTES`).

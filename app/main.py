@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -39,6 +40,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="세특연구소 API", lifespan=lifespan)
 app.add_middleware(RequestContextMiddleware)
+# 웹 프론트엔드는 API와 다른 오리진에서 돈다. 인증은 Authorization 헤더로만
+# 하므로 쿠키(allow_credentials)는 필요 없고, 허용 오리진도 설정으로 좁혀 둔다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 app.include_router(api_router)
 
 
