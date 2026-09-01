@@ -6,9 +6,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.seteuk_service as seteuk_service
+from app.models.academic_performance import AcademicPerformance
+from app.models.activity import ActivityCategory, ActivityType
 from app.models.attendance import Attendance
 from app.models.user import User
-from app.schemas.seteuk import AttendanceItem, SeteukAnalysisResult
+from app.schemas.seteuk import (
+    AcademicPerformanceItem,
+    ActivityItem,
+    AttendanceItem,
+    AwardItem,
+    SeteukAnalysisResult,
+)
 from tests.conftest import TestSessionLocal
 
 FAKE_RESULT = SeteukAnalysisResult(
@@ -176,3 +184,112 @@ async def test_other_user_cannot_access_upload(
 
     assert response.status_code == 404
     assert response.json()["error_code"] == "UPLOAD_NOT_FOUND"
+
+
+FAKE_RESULT_WITH_FUTURE_GRADE_DATA = SeteukAnalysisResult(
+    academic_performance=[
+        AcademicPerformanceItem(grade=2, semester=1, category="수학", subject="수학Ⅰ"),
+        # 현재(2학년 1학기)와 같은 학년의 이후 학기 — 걸러져야 한다.
+        AcademicPerformanceItem(grade=2, semester=2, category="수학", subject="수학Ⅱ"),
+        # 현재보다 이후 학년 — 걸러져야 한다.
+        AcademicPerformanceItem(grade=3, semester=1, category="수학", subject="미적분"),
+    ],
+    activities=[
+        ActivityItem(
+            grade=2,
+            semester=1,
+            activity_category=ActivityCategory.SUBJECT_SPECIALTY,
+            activity_name="지수함수 모델링",
+            activity_type=ActivityType.REPORT,
+            description="지수함수로 확산을 모델링함.",
+        ),
+        # 같은 학년, 이후 학기 — 걸러져야 한다.
+        ActivityItem(
+            grade=2,
+            semester=2,
+            activity_category=ActivityCategory.SUBJECT_SPECIALTY,
+            activity_name="로지스틱 함수 모델링",
+            activity_type=ActivityType.REPORT,
+            description="지수함수 모델을 로지스틱 함수로 보완함.",
+        ),
+        # 같은 학년, 학기 없는 학년 단위 기록(자율활동 등) — 허용된다.
+        ActivityItem(
+            grade=2,
+            semester=None,
+            activity_category=ActivityCategory.AUTONOMOUS,
+            activity_name="학급자치회 활동",
+            activity_type=ActivityType.OTHER,
+            description="학급 행사를 기획함.",
+        ),
+        # 이후 학년 — 걸러져야 한다.
+        ActivityItem(
+            grade=3,
+            semester=1,
+            activity_category=ActivityCategory.SUBJECT_SPECIALTY,
+            activity_name="미적분 심화 탐구",
+            activity_type=ActivityType.REPORT,
+            description="치환적분을 활용함.",
+        ),
+    ],
+    awards=[
+        # grade/semester가 없어(date만 있음) 이 검사의 대상이 아니다 — 그대로 남는다.
+        AwardItem(name="전국 수학경시대회 금상"),
+    ],
+)
+
+
+async def test_upload_drops_records_beyond_declared_current_grade(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """실제 문서에 학생이 아직 안 겪었어야 할 시점의 기록이 있으면(잘못된 파일,
+    갱신 안 된 프로필 등) 반영하지 않는다 — 안 그러면 진단·로드맵이 "현재 위치"를
+    잘못 판단한다."""
+    await client.post(
+        "/api/v1/profile",
+        json={
+            "name": "홍길동",
+            "grade": 2,
+            "semester": 1,
+            "career_goal": {"goal": "연구원"},
+            "target_department": "미정",
+            "interest_keywords": [],
+            "career_specificity": {"level": "broad"},
+            "preferred_output_types": [],
+            "activity_channels": [],
+            "self_assessed_strengths": "",
+            "self_assessed_weaknesses": "",
+        },
+        headers=auth_headers,
+    )
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return FAKE_RESULT_WITH_FUTURE_GRADE_DATA
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+
+    created = await client.post(
+        "/api/v1/seteuk/uploads",
+        headers=auth_headers,
+        files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
+    )
+    upload_id = created.json()["upload_id"]
+    await client.get(f"/api/v1/seteuk/uploads/{upload_id}", headers=auth_headers)
+
+    result = (
+        await client.get(f"/api/v1/seteuk/uploads/{upload_id}/result", headers=auth_headers)
+    ).json()
+
+    # 2-1과 2학년 학년단위 기록만 남고, 같은 학년의 2-2와 3-1은 걸러진다.
+    kept_subjects = {item["subject"] for item in result["academic_performance"]}
+    assert kept_subjects == {"수학Ⅰ"}
+    kept_activity_names = {item["activity_name"] for item in result["activities"]}
+    assert kept_activity_names == {"지수함수 모델링", "학급자치회 활동"}
+    # grade/semester가 없는 수상은 판단 근거가 없어 그대로 남는다.
+    assert len(result["awards"]) == 1
+
+    # 몇 건이 왜 빠졌는지 errors에 남는다.
+    assert any(e["block_id"] == "future_grade_filter" for e in result["errors"])
+
+    async with TestSessionLocal() as db:
+        academic_rows = (await db.execute(select(AcademicPerformance))).scalars().all()
+    assert {r.subject for r in academic_rows} == {"수학Ⅰ"}

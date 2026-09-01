@@ -137,6 +137,16 @@ Base URL: `/api/v1`
 파싱이 끝나면 결과가 6개 도메인 테이블에 자동 반영된다. 별도 확인/적용 단계는 없다.
 PDF 원본은 저장하지 않는다.
 
+파싱된 기록 중 사용자가 선언한 현재 학년-학기(`users.current_grade`/
+`current_semester`)보다 **이후 시점의 기록은 저장하지 않는다**(온보딩 전이라
+현재 학년-학기가 없으면 이 검사를 하지 않는다). 문서 자체가 잘못됐거나(다른
+버전, 다른 사람 것) 프로필을 갱신하지 않은 채 더 최신 생기부를 다시 올린
+경우, 아직 일어나지 않았어야 할 시점의 데이터가 진단·로드맵의 "현재 위치"
+판단을 어긋나게 만들기 때문이다. 같은 학년의 학년 단위 기록(자율활동 등,
+학기 구분이 없는 것)은 그 학년이 진행 중이면 허용한다. `awards`는
+grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러진 게 있으면
+`errors`에 `block_id: "future_grade_filter"`로 몇 건이 왜 빠졌는지 남는다.
+
 **GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence }`
 `status`: `processing | done | failed`
 
