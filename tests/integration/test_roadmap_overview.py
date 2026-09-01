@@ -141,3 +141,68 @@ async def test_roadmap_overview_without_diagnosis_still_shows_plans(
     assert body["future"] == [
         {"grade": 2, "semester": 2, "theme": None, "plan_titles": ["미리 세운 계획"]}
     ]
+
+
+async def test_roadmap_overview_survives_year_level_completed_nodes(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """자율활동/진로활동처럼 학기 없이 학년 단위로만 기록된 근거를 든 completed
+    노드는 career_thread.semester가 null일 수 있다(실제 DeepSeek 응답에서 발생해
+    진단 전체가 실패했던 버그). None과 int가 같은 학년 안에 섞여도 정렬이
+    깨지지 않아야 하고, semester가 없는 suggested 노드는 마일스톤에서 조용히
+    빠져야 한다."""
+    await _onboard(client, auth_headers)
+    async with TestSessionLocal() as db:
+        user = await db.scalar(
+            select(User).where(User.email == "seteuk-tester@example.com")
+        )
+        diagnosis = Diagnosis(
+            user_id=user.id,
+            status=DiagnosisStatus.DONE.value,
+            career_thread=[
+                {
+                    "grade": 1,
+                    "semester": None,
+                    "type": "completed",
+                    "theme": "자율활동 기반 리더십",
+                    "source": "자율활동: 학급자치회장",
+                    "connection": "학기 활동으로 이어짐",
+                },
+                {
+                    "grade": 1,
+                    "semester": 2,
+                    "type": "completed",
+                    "theme": "로봇 입문",
+                    "source": "활동: 로봇 제작 동아리",
+                    "connection": "다음 단계로 이어짐",
+                },
+                {
+                    "grade": 2,
+                    "semester": None,
+                    "type": "suggested",
+                    "theme": "학기를 특정할 수 없는 제안",
+                    "source": None,
+                    "connection": "…",
+                },
+            ],
+            weaknesses=[],
+            headline_comment=None,
+        )
+        db.add(diagnosis)
+        await db.commit()
+
+    response = await client.get("/api/v1/plans/roadmap-overview", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+
+    # 학년 안에서 semester=None인 노드가 int 노드와 섞여도 깨지지 않고, 정렬
+    # 목적으로 맨 앞에 온다.
+    assert body["past"] == [
+        {
+            "grade": 1,
+            "summary": "자율활동 기반 리더십 → 로봇 입문",
+            "themes": ["자율활동 기반 리더십", "로봇 입문"],
+        }
+    ]
+    # semester가 없는 suggested 노드는 마일스톤으로 배치할 수 없으므로 제외된다.
+    assert body["future"] == []

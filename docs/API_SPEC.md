@@ -197,7 +197,7 @@ PDF 원본은 저장하지 않는다.
   "semester_reviews": [{ "grade": 2, "semester": 1,
                          "grades_review": "…", "reading_review": "…",
                          "activities_review": "…" }],
-  "career_thread": [{ "grade": 1, "semester": 1, "type": "completed",
+  "career_thread": [{ "grade": 1, "semester": "1 또는 null", "type": "completed",
                       "theme": "…", "source": "…", "connection": "…" }],
   "activity_inventory": [{ "activity_id": "uuid", "grade": 2, "semester": 1,
                            "competency": "전공관련교과역량", "depth_level": "심화탐구",
@@ -226,17 +226,26 @@ PDF 원본은 저장하지 않는다.
   함께 입력받는 1회 호출. 진로 관점에서 의미 있는 것만 사슬에 올리므로(중요하지
   않은 건 자동으로 빠짐), 활동뿐 아니라 수상·봉사도 노드가 될 수 있다. 과거
   (`completed`)와 학생의 현재 학년-학기 이후 제안(`suggested`)이 학년-학기 순으로
-  한 배열에 담긴다.
+  한 배열에 담긴다. `semester`는 자율활동/진로활동처럼 원자료 자체가 학기 없이
+  학년 단위로만 존재하는 근거를 든 `completed` 노드에 한해 `null`일 수 있다
+  (`suggested` 노드는 항상 구체적인 학기를 갖는다 — 언제 할지 모르는 제안은
+  실행 계획으로 옮길 수 없기 때문).
 - **`activity_inventory`** — 학년 단위 배치 LLM 호출(활동이 많으면 출력이 잘릴
   위험이 있어 학년마다 나눠 부른다). `career_thread`와 달리 **필터링하지 않고
   전량**을 `competency`(전공관련교과역량/진로역량/공동체역량)와
   `depth_level`(단순참여/탐구시도/심화탐구)로 분류한다. 프론트는 학년-학기 ×
   역량 매트릭스에 카드로 배치하면 된다.
-- **`knowledge_graph_links`** — 과목/키워드가 겹치는 활동 쌍을 결정론적으로 먼저
-  추리고(이미 `parent_activity_id`로 이어진 쌍은 제외), 그 후보 중 실제로 의미
-  있다고 LLM이 확정한 것만 담긴다. `link_type`은 같은 주제가 학년이 오르며
-  깊어진 `vertical`, 서로 다른 과목이 하나의 결과로 결합한 `horizontal` 중
-  하나. `relation_label`이 그 융합의 핵심 테마를 짧게 설명한다.
+- **`knowledge_graph_links`** — **과목명이나 키워드로 후보를 미리 좁히지 않는다.**
+  한국 고교 교육과정은 같은 과목이 여러 학기에 반복되는 경우가 드물어서
+  (화학Ⅰ→화학Ⅱ처럼 과목명 자체가 바뀌며 심화된다) 문자열 매칭으로는 대부분의
+  실제 연결을 놓친다 — 그리고 애초에 중요한 건 과목이 아니라 **활동의 내용이
+  이어지는지**다(예: 정보 시간의 로봇 코딩과 동아리의 로봇 대회 참가는 과목이
+  달라도 명백한 심화다). 대신 활동 전체 목록을 LLM에 통째로 주고 내용을 읽어
+  직접 판단하게 한다(이미 `parent_activity_id`로 이어진 쌍은 제외). 활동이
+  아주 많으면(현재 임계값 120건) 한 호출에 다 넣지 않고 인접한 두 학년씩 묶어
+  나눠 부른 뒤 중복 링크를 병합한다. `link_type`은 같은 활동 계열이 학년이
+  오르며 깊어진 `vertical`, 서로 다른 활동의 방법·소재가 결합한 `horizontal`
+  중 하나. `relation_label`이 그 연결의 핵심 내용을 짧게 설명한다.
 - **`strengths` / `weaknesses` / `opportunities` / `threats` / `headline_comment`**
   — 종합 평가(SWOT), 1회 호출. **원본 데이터가 아니라 `semester_reviews` /
   `career_thread` / `activity_inventory`의 결과만** 입력받아 생성된다.
@@ -353,7 +362,9 @@ PDF 원본은 저장하지 않는다.
 현재 학년-학기와 진단의 가장 시급한 지적, `future`는 제안(`suggested`) 노드의
 테마와 그 학기에 이미 세워둔 계획 제목을 합친 것이다. 진단을 아직 안 돌렸으면
 `past`가 비고 `current.headline_comment`가 `null`일 뿐, 계획만으로도 `future`는
-채워진다.
+채워진다. `career_thread`의 `completed` 노드 중 학기가 없는(`semester: null`)
+것은 그 학년 안에서 맨 앞으로 정렬되고, `suggested` 노드는 학기가 없으면
+마일스톤으로 배치할 수 없어 조용히 제외된다.
 
 ### 3.7 후속 탐구 추천 (기능2)
 

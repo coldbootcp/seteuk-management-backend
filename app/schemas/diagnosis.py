@@ -75,7 +75,10 @@ class SemesterReview(BaseModel):
 
 class CareerThreadEntry(BaseModel):
     grade: int
-    semester: int
+    # 자율활동/진로활동/행동특성및종합의견처럼 학년 단위로만 존재하고 학기가
+    # 없는 근거를 든 노드는 semester가 null일 수 있다(실제 DeepSeek 응답에서
+    # 발생 — 필수로 두면 그런 노드가 하나만 있어도 진단 전체가 실패한다).
+    semester: int | None = None
     type: Literal["completed", "suggested"]
     theme: str
     source: str | None = None
@@ -152,16 +155,36 @@ class CareerThreadDraft(BaseModel):
     career_thread: list[CareerThreadEntry]
 
 
+class ActivityInventoryDraftEntry(BaseModel):
+    """활동 인벤토리 산출물 한 건. UUID를 그대로 베끼게 하면 한 글자만 틀려도
+    파싱이 깨지므로, LLM에게는 그 호출 안에서만 유효한 정수 index를 준다 —
+    실제 activity_id로의 변환은 파이프라인이 index로 역참조해서 처리한다."""
+
+    index: int
+    competency: Literal["전공관련교과역량", "진로역량", "공동체역량"]
+    depth_level: Literal["단순참여", "탐구시도", "심화탐구"]
+    headline: str
+
+
 class ActivityInventoryDraft(BaseModel):
     """활동 인벤토리 산출물 — 배치 하나(보통 학년 단위)에 대한 분류 결과."""
 
-    entries: list[ActivityInventoryEntry]
+    entries: list[ActivityInventoryDraftEntry]
+
+
+class KnowledgeGraphDraftLink(BaseModel):
+    """지식 그래프 산출물 한 건 — activity_id 대신 index로 참조한다(위와 같은 이유)."""
+
+    from_index: int
+    to_index: int
+    link_type: Literal["vertical", "horizontal"]
+    relation_label: str
 
 
 class KnowledgeGraphDraft(BaseModel):
     """지식 그래프 산출물 — 후보 쌍 중 실제로 의미 있다고 확정된 것만 담김."""
 
-    links: list[KnowledgeGraphLink]
+    links: list[KnowledgeGraphDraftLink]
 
 
 class OverallAssessmentDraft(BaseModel):

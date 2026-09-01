@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from httpx import AsyncClient
 
@@ -21,7 +23,7 @@ async def _fake_roadmap(system_prompt: str, user_content: str, response_model: t
                         "description": "공개 데이터로 예측값과 실측값을 비교한다.",
                         "subject": "수학Ⅰ",
                         "keywords": ["데이터 분석"],
-                        "source_activity_id": None,
+                        "source_activity_index": None,
                     }
                 ],
             },
@@ -33,6 +35,45 @@ async def _fake_roadmap(system_prompt: str, user_content: str, response_model: t
                 "rationale": "무시되어야 한다.",
                 "items": [],
             },
+        ]
+    )
+
+
+async def _fake_roadmap_linking_first_past_activity(
+    system_prompt: str, user_content: str, response_model: type
+):
+    """past_activities의 첫 번째 활동을 index=1로 잇는 계획을 낸다 — UUID가
+    아니라 index로 참조하는 새 계약을 실제로 검증하기 위한 fake."""
+    assert response_model is RoadmapDraft
+    payload = json.loads(user_content)
+    assert payload["past_activities"], "이 fake는 과거 활동이 있는 시나리오에서만 써야 함"
+    return RoadmapDraft(
+        semesters=[
+            {
+                "grade": 2,
+                "semester": 2,
+                "theme": "심화 단계",
+                "rationale": "이전 활동을 심화한다.",
+                "items": [
+                    {
+                        "item_type": "activity",
+                        "title": "이전 활동을 잇는 후속 탐구",
+                        "description": "직전 활동의 한계를 보완한다.",
+                        "subject": None,
+                        "keywords": [],
+                        "source_activity_index": 1,
+                    },
+                    {
+                        # 존재하지 않는 index — 서비스가 조용히 버려야 한다.
+                        "item_type": "activity",
+                        "title": "지어낸 index를 가리키는 계획",
+                        "description": "이 계획의 source는 무시되어야 한다.",
+                        "subject": None,
+                        "keywords": [],
+                        "source_activity_index": 999,
+                    },
+                ],
+            }
         ]
     )
 
@@ -212,3 +253,38 @@ async def test_roadmap_regeneration_keeps_user_plans(
     titles = sorted(item["title"] for item in listed.json()["items"])
     # 재생성이 사용자 계획을 삼키지 않고, AI 계획도 중복되지 않아야 한다.
     assert titles == ["내가 직접 세운 계획", "실제 확진자 데이터로 모델 검증"]
+
+
+async def test_roadmap_resolves_source_activity_index_to_real_activity(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM이 activity_id를 직접 베끼지 않고 index로만 참조하는 새 계약을 검증한다.
+    존재하는 index는 실제 활동으로 이어지고, 지어낸 index는 조용히 버려져야 한다."""
+    await _onboard(client, auth_headers)
+    activity = await client.post(
+        "/api/v1/activities",
+        json={
+            "grade": 2,
+            "semester": 1,
+            "activity_category": "과목세부특기사항",
+            "activity_name": "로지스틱 함수로 확산 곡선 보정",
+            "activity_type": "report",
+            "description": "지수함수 모델의 한계를 로지스틱 함수로 보완함.",
+        },
+        headers=auth_headers,
+    )
+    activity_id = activity.json()["id"]
+
+    monkeypatch.setattr(
+        plan_service, "call_structured", _fake_roadmap_linking_first_past_activity
+    )
+    response = await client.post("/api/v1/plans/roadmap", json={}, headers=auth_headers)
+    assert response.status_code == 200
+    created = response.json()["created_plan_items"]
+    assert len(created) == 2
+
+    linked = next(p for p in created if p["title"] == "이전 활동을 잇는 후속 탐구")
+    assert linked["source_activity_id"] == activity_id
+
+    bogus = next(p for p in created if p["title"] == "지어낸 index를 가리키는 계획")
+    assert bogus["source_activity_id"] is None

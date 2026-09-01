@@ -16,8 +16,9 @@ ROADMAP_SYSTEM_PROMPT = """너는 대한민국 고등학생의 3년 학교생활
    제안하지 마라.
 4. item_type은 activity(탐구/프로젝트), reading(독서), assessment(수행평가),
    grade(성적 목표), volunteer(봉사), award(대회), other 중 하나다.
-5. 어떤 계획이 과거의 특정 활동을 잇는 것이라면 source_activity_id에 그 활동의 id를
-   그대로 넣어라. 주어진 목록에 없는 id를 지어내지 말고, 이어지는 활동이 없으면 null로 둬라.
+5. 어떤 계획이 과거의 특정 활동을 잇는 것이라면 source_activity_index에 그 활동의
+   index(정수)를 그대로 넣어라. activity_id가 아니다. 주어진 목록에 없는 번호를
+   지어내지 말고, 이어지는 활동이 없으면 null로 둬라.
 6. description은 무엇을 어떻게 할지 학생이 바로 착수할 수 있을 만큼 구체적으로 쓰되
    3문장을 넘기지 마라.
 7. 이미 세워둔 계획(existing_plans)과 중복되는 항목은 만들지 마라.
@@ -28,6 +29,6 @@ ROADMAP_SYSTEM_PROMPT = """너는 대한민국 고등학생의 3년 학교생활
    "items": [
      {"item_type": "activity", "title": "string", "description": "string",
       "subject": "string 또는 null", "keywords": ["string"],
-      "source_activity_id": "uuid 또는 null"}
+      "source_activity_index": 3}
    ]}
 ]}"""

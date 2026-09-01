@@ -51,15 +51,13 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
     if response_model is CareerThreadDraft:
         return FAKE_CAREER_THREAD
     if response_model is ActivityInventoryDraft:
-        # 배치(학년)에 실제로 들어온 활동 id를 그대로 돌려줘야 pipeline의
-        # known_ids 검증을 통과한다.
+        # 배치(학년)에 실제로 들어온 index를 그대로 돌려줘야 pipeline의 역참조를
+        # 통과한다 — activity_id를 직접 베끼게 하지 않는 게 이 계약의 핵심이다.
         payload = json.loads(user_content)
         return ActivityInventoryDraft(
             entries=[
                 {
-                    "activity_id": a["id"],
-                    "grade": a["grade"],
-                    "semester": a["semester"],
+                    "index": a["index"],
                     "competency": "전공관련교과역량",
                     "depth_level": "탐구시도",
                     "headline": f"{a['activity_name']} 요약",
@@ -68,16 +66,20 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
             ]
         )
     if response_model is KnowledgeGraphDraft:
+        # 후보 쌍을 미리 추려주지 않는다 — 전체 활동 목록을 보고 직접 판단해야
+        # 하므로, 여기서도 실제 내용(과목)을 보고 링크를 결정한다.
         payload = json.loads(user_content)
+        math_activities = [a for a in payload["activities"] if a["subject"] == "수학"]
+        if len(math_activities) < 2:
+            return KnowledgeGraphDraft(links=[])
         return KnowledgeGraphDraft(
             links=[
                 {
-                    "from_activity_id": c["activity_a"]["id"],
-                    "to_activity_id": c["activity_b"]["id"],
-                    "link_type": "vertical" if c["same_subject"] else "horizontal",
+                    "from_index": math_activities[0]["index"],
+                    "to_index": math_activities[1]["index"],
+                    "link_type": "vertical",
                     "relation_label": "테스트 융합",
                 }
-                for c in payload["candidates"]
             ]
         )
     if response_model is OverallAssessmentDraft:
@@ -128,8 +130,8 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
         headers=auth_headers,
     )
 
-    # 같은 과목·다른 학기 활동 두 개 — 지식 그래프 후보(같은 과목 심화)가
-    # 결정론적으로 하나는 생기도록 만든다.
+    # 같은 과목·다른 학기 활동 두 개 — 지식 그래프 fake가 내용(과목)을 보고
+    # 이 둘을 링크로 찾아내는지 확인하기 위함이다.
     activity_a = (
         await client.post(
             "/api/v1/activities",
@@ -204,7 +206,7 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     assert inventory_ids == {activity_a["id"], activity_b["id"]}
     assert all(e["competency"] == "전공관련교과역량" for e in body["activity_inventory"])
 
-    # 지식 그래프 — 같은 과목·다른 학기라 후보가 하나 잡히고 vertical로 확정된다.
+    # 지식 그래프 — 같은 과목이라 내용 기반으로 링크가 하나 확정된다.
     assert len(body["knowledge_graph_links"]) == 1
     link = body["knowledge_graph_links"][0]
     assert {link["from_activity_id"], link["to_activity_id"]} == {

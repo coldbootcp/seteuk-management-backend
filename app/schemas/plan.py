@@ -100,9 +100,10 @@ class RoadmapDraftItem(BaseModel):
     description: str
     subject: str | None = None
     keywords: list[str] = []
-    # LLM이 "이 계획은 과거의 어떤 활동을 잇는다"고 판단했을 때 채워지는 활동 id.
-    # 프롬프트에 넘긴 목록 밖의 값이면 서비스에서 버린다.
-    source_activity_id: uuid.UUID | None = None
+    # LLM이 "이 계획은 과거의 어떤 활동을 잇는다"고 판단했을 때 채워지는 값.
+    # UUID를 그대로 베끼게 하면 한 글자만 틀려도 응답 전체 파싱이 깨지므로,
+    # past_activities에 함께 준 정수 index를 쓴다(서비스가 실제 id로 역참조).
+    source_activity_index: int | None = None
 
 
 class RoadmapDraft(BaseModel):

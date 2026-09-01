@@ -163,6 +163,9 @@ async def generate_roadmap(
             select(Activity).where(Activity.user_id == user.id).order_by(Activity.grade)
         )
     )
+    # UUID를 그대로 베끼게 하면 한 글자만 틀려도 RoadmapDraft 전체 파싱이 깨지므로,
+    # 이 호출 안에서만 유효한 정수 index로 참조하게 하고 서비스가 역참조한다.
+    activity_by_index = dict(enumerate(activities, start=1))
     existing_plans = list(
         await db.scalars(
             select(PlanItem).where(
@@ -195,7 +198,7 @@ async def generate_roadmap(
             ),
             "past_activities": [
                 {
-                    "id": str(a.id),
+                    "index": index,
                     "grade": a.grade,
                     "semester": a.semester,
                     "activity_name": a.activity_name,
@@ -203,7 +206,7 @@ async def generate_roadmap(
                     "subject": a.subject,
                     "keywords": a.keywords,
                 }
-                for a in activities
+                for index, a in activity_by_index.items()
             ],
             "existing_plans": [
                 {
@@ -231,7 +234,6 @@ async def generate_roadmap(
             ):
                 await db.delete(plan)
 
-    known_activity_ids = {a.id for a in activities}
     target_set = set(targets)
     created: list[PlanItem] = []
     kept_semesters: list[RoadmapSemester] = []
@@ -241,11 +243,14 @@ async def generate_roadmap(
             continue
         kept_semesters.append(semester_plan)
         for item in semester_plan.items:
-            # LLM이 지어낸 활동 id는 버린다 — 남의 행이나 없는 행을 가리키면
-            # 계보가 깨진다.
-            source_activity_id = (
-                item.source_activity_id if item.source_activity_id in known_activity_ids else None
+            # LLM이 지어내거나 범위를 벗어난 index는 버린다 — 남의 행이나 없는
+            # 행을 가리키면 계보가 깨진다.
+            source_activity = (
+                activity_by_index.get(item.source_activity_index)
+                if item.source_activity_index is not None
+                else None
             )
+            source_activity_id = source_activity.id if source_activity else None
             plan = PlanItem(
                 user_id=user.id,
                 item_type=item.item_type.value,
@@ -288,10 +293,17 @@ async def get_roadmap_overview(db: AsyncSession, user: User) -> RoadmapOverview:
 
     career_thread = diagnosis.career_thread or [] if diagnosis else []
     completed_nodes = [n for n in career_thread if n["type"] == "completed"]
-    suggested_nodes = [n for n in career_thread if n["type"] == "suggested"]
+    # suggested는 반드시 특정 미래 학기를 겨냥해야 마일스톤에 배치할 수 있다 —
+    # 자율활동처럼 학기가 없는 근거를 든 노드(semester가 null)는 여기서 못 쓴다.
+    suggested_nodes = [
+        n for n in career_thread if n["type"] == "suggested" and n["semester"] is not None
+    ]
 
+    # 자율활동/진로활동처럼 학기 없이 학년 단위로만 존재하는 근거를 든 노드는
+    # semester가 null일 수 있다 — None과 int를 직접 비교하면 같은 학년 안에서
+    # 정렬이 깨지므로, 정렬 목적으로만 0으로 취급한다(그 학년 안에서 맨 앞에 옴).
     past_by_grade: dict[int, list[str]] = {}
-    for node in sorted(completed_nodes, key=lambda n: (n["grade"], n["semester"])):
+    for node in sorted(completed_nodes, key=lambda n: (n["grade"], n["semester"] or 0)):
         past_by_grade.setdefault(node["grade"], []).append(node["theme"])
     past = [
         RoadmapOverviewPast(grade=grade, summary=" → ".join(themes), themes=themes)

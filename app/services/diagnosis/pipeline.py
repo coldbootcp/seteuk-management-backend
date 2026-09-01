@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.activity import Activity
 from app.models.user import User
 from app.schemas.diagnosis import (
     ActivityInventoryDraft,
@@ -25,7 +26,6 @@ from app.schemas.diagnosis import (
 from app.services.diagnosis.data import (
     SemesterGroup,
     compute_grades_trend,
-    generate_fusion_candidates,
     get_activities_by_grade,
     get_career_thread_material,
     get_semester_groups,
@@ -40,6 +40,13 @@ from app.services.diagnosis.prompts import (
     SEMESTER_REVIEW_SYSTEM_PROMPT,
 )
 from app.services.llm import call_structured
+
+# 활동 설명은 원문이 길어 지식 그래프 입력에 그대로 실으면 165개 활동만으로도
+# 컨텍스트가 커진다.
+_KNOWLEDGE_GRAPH_DESCRIPTION_LIMIT = 200
+# 이 개수를 넘으면 한 호출에 다 넣지 않고 인접 학년 쌍으로 나눠 부른다. 165개
+# 규모는 실제 검증에서 문제없이 처리됐으므로, 그보다 확실히 낮게 여유를 두었다.
+_KNOWLEDGE_GRAPH_BATCH_THRESHOLD = 120
 
 
 async def generate_pre_questions(
@@ -113,13 +120,18 @@ async def _write_career_thread(
 
 
 async def _classify_activity_batch(
-    grade: int, activities: list[Any], interests: dict[str, Any]
+    grade: int, activities: list[Activity], interests: dict[str, Any]
 ) -> list[ActivityInventoryEntry]:
     """활동 인벤토리 — 학년 단위 배치 호출. 진로 유기적 평가와 달리 필터링하지
-    않고 입력된 활동 전량에 분류를 매긴다."""
+    않고 입력된 활동 전량에 분류를 매긴다.
+
+    LLM에게 activity_id(UUID)를 그대로 베끼게 하면 한 글자만 틀려도 그 배치
+    전체의 파싱이 깨진다(실제로 관측됨). 대신 이 호출 안에서만 유효한 정수
+    index를 주고, 응답의 index를 실제 activity_id로 역참조한다."""
+    index_of_activity = dict(enumerate(activities, start=1))
     payload = [
         {
-            "id": str(a.id),
+            "index": index,
             "grade": a.grade,
             "semester": a.semester,
             "activity_category": a.activity_category,
@@ -128,7 +140,7 @@ async def _classify_activity_batch(
             "description": a.description,
             "keywords": a.keywords,
         }
-        for a in activities
+        for index, a in index_of_activity.items()
     ]
     user_content = json.dumps(
         {"grade": grade, "career_context": interests, "activities": payload}, ensure_ascii=False
@@ -136,34 +148,116 @@ async def _classify_activity_batch(
     draft = await call_structured(
         ACTIVITY_INVENTORY_SYSTEM_PROMPT, user_content, ActivityInventoryDraft
     )
-    # LLM이 존재하지 않는 id를 지어내거나 빠뜨릴 수 있으므로, 실제 배치에 있던
-    # activity_id만 남긴다.
-    known_ids = {a.id for a in activities}
-    return [entry for entry in draft.entries if entry.activity_id in known_ids]
+
+    entries: list[ActivityInventoryEntry] = []
+    for draft_entry in draft.entries:
+        activity = index_of_activity.get(draft_entry.index)
+        if activity is None:
+            continue  # LLM이 지어내거나 범위를 벗어난 index — 버린다.
+        entries.append(
+            ActivityInventoryEntry(
+                activity_id=activity.id,
+                grade=activity.grade,
+                semester=activity.semester,
+                competency=draft_entry.competency,
+                depth_level=draft_entry.depth_level,
+                headline=draft_entry.headline,
+            )
+        )
+    return entries
+
+
+async def _write_knowledge_graph_batch(
+    activities: list[Activity], interests: dict[str, Any]
+) -> list[KnowledgeGraphLink]:
+    """지식 그래프 한 배치 호출. activity_id 대신 index를 쓰는 이유는
+    _classify_activity_batch와 같다."""
+    if not activities:
+        return []
+
+    index_of_activity = dict(enumerate(activities, start=1))
+    index_by_id = {a.id: index for index, a in index_of_activity.items()}
+    payload = [
+        {
+            "index": index,
+            "grade": a.grade,
+            "semester": a.semester,
+            "subject": a.subject,
+            "activity_name": a.activity_name,
+            "description": (a.description or "")[:_KNOWLEDGE_GRAPH_DESCRIPTION_LIMIT],
+            "keywords": a.keywords,
+            # 이미 계보로 이어진 부모 — 이 링크는 진로 유기적 평가가 다루므로
+            # 지식 그래프에서 중복해서 만들지 않도록 알려준다.
+            "parent_activity_index": (
+                index_by_id.get(a.parent_activity_id) if a.parent_activity_id else None
+            ),
+        }
+        for index, a in index_of_activity.items()
+    ]
+    user_content = json.dumps(
+        {"career_context": interests, "activities": payload}, ensure_ascii=False
+    )
+    draft = await call_structured(KNOWLEDGE_GRAPH_SYSTEM_PROMPT, user_content, KnowledgeGraphDraft)
+
+    links: list[KnowledgeGraphLink] = []
+    for draft_link in draft.links:
+        from_activity = index_of_activity.get(draft_link.from_index)
+        to_activity = index_of_activity.get(draft_link.to_index)
+        if from_activity is None or to_activity is None:
+            continue
+        links.append(
+            KnowledgeGraphLink(
+                from_activity_id=from_activity.id,
+                to_activity_id=to_activity.id,
+                link_type=draft_link.link_type,
+                relation_label=draft_link.relation_label,
+            )
+        )
+    return links
 
 
 async def _write_knowledge_graph(
-    candidates: list[Any], interests: dict[str, Any]
+    activities_by_grade: dict[int, list[Activity]], interests: dict[str, Any]
 ) -> list[KnowledgeGraphLink]:
-    """지식 그래프 — 과목/키워드 겹침으로 이미 좁혀진 후보 쌍만 LLM에 준다.
-    후보가 하나도 없으면 호출 자체를 건너뛴다(빈 배열은 정상 상태)."""
-    if not candidates:
-        return []
+    """지식 그래프 — 과목명이 같은지·키워드가 겹치는지로 후보를 미리 좁히지
+    않는다. 한국 고교 교육과정은 같은 과목이 여러 학기에 반복되는 경우가 드물어
+    (화학Ⅰ→화학Ⅱ처럼 과목명 자체가 바뀌며 심화된다), 문자열 매칭으로는 실제
+    심화 관계를 거의 못 찾는다 — 대신 활동 전체를 LLM에 통째로 주고 내용을 읽고
+    직접 판단하게 한다(career_thread와 같은 패턴).
 
-    known_ids = {c.activity_a.id for c in candidates} | {c.activity_b.id for c in candidates}
-    user_content = json.dumps(
-        {
-            "career_context": interests,
-            "candidates": [c.to_prompt_json() for c in candidates],
-        },
-        ensure_ascii=False,
+    다만 활동이 아주 많은 사용자는 한 호출에 다 넣으면 출력이 잘리거나 품질이
+    떨어질 수 있다(activity_inventory에서 실제로 UUID가 깨지는 사고를 겪었다 —
+    지금은 index로 막았지만 '한 호출에 너무 많이 담는' 근본 위험은 남아 있다).
+    임계값을 넘으면 인접한 두 학년씩 묶어 나눠 호출한다 — 실제 심화 관계는
+    거의 항상 인접 학년 사이(1→2, 2→3)에서 일어나므로 이 창으로도 대부분
+    잡히고, 겹치는 학년에서 중복으로 찾은 링크는 병합 시 걸러낸다."""
+    all_activities = [a for batch in activities_by_grade.values() for a in batch]
+    if len(all_activities) <= _KNOWLEDGE_GRAPH_BATCH_THRESHOLD:
+        return await _write_knowledge_graph_batch(all_activities, interests)
+
+    grades = sorted(activities_by_grade)
+    windows = (
+        [[g, grades[i + 1]] for i, g in enumerate(grades[:-1])] if len(grades) > 1 else [grades]
     )
-    draft = await call_structured(KNOWLEDGE_GRAPH_SYSTEM_PROMPT, user_content, KnowledgeGraphDraft)
-    return [
-        link
-        for link in draft.links
-        if link.from_activity_id in known_ids and link.to_activity_id in known_ids
-    ]
+    batches = await asyncio.gather(
+        *(
+            _write_knowledge_graph_batch(
+                [a for g in window for a in activities_by_grade[g]], interests
+            )
+            for window in windows
+        )
+    )
+
+    seen: set[frozenset[uuid.UUID]] = set()
+    merged: list[KnowledgeGraphLink] = []
+    for batch in batches:
+        for link in batch:
+            pair = frozenset({link.from_activity_id, link.to_activity_id})
+            if pair in seen:
+                continue
+            seen.add(pair)
+            merged.append(link)
+    return merged
 
 
 async def _write_overall_assessment(
@@ -204,8 +298,6 @@ async def run_diagnosis_pipeline(
     semester_groups = await get_semester_groups(db, user_id)
     career_material = await get_career_thread_material(db, user_id)
     activities_by_grade = await get_activities_by_grade(db, user_id)
-    all_activities = [a for group in activities_by_grade.values() for a in group]
-    fusion_candidates = generate_fusion_candidates(all_activities)
     grades_trend = await compute_grades_trend(db, user_id)
 
     # 학기별 평가·진로 유기적 평가·활동 인벤토리·지식 그래프는 서로 입력이
@@ -229,7 +321,7 @@ async def run_diagnosis_pipeline(
                 for grade, batch in activities_by_grade.items()
             )
         ),
-        _write_knowledge_graph(fusion_candidates, interests),
+        _write_knowledge_graph(activities_by_grade, interests),
     )
     semester_reviews = list(semester_reviews)
     activity_inventory = [entry for batch in inventory_batches for entry in batch]
