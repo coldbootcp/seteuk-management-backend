@@ -6,6 +6,7 @@
 """
 
 import json
+import logging
 import uuid
 
 from sqlalchemy import select
@@ -26,7 +27,10 @@ from app.schemas.recommendation import (
 from app.services.activity_lineage_service import get_lineage
 from app.services.llm import call_structured
 from app.services.recommendation_prompts import FOLLOW_UP_SYSTEM_PROMPT
+from app.services.review import review_options
 from app.services.student_interest_service import get_current_interests
+
+logger = logging.getLogger(__name__)
 
 
 async def create_follow_up(
@@ -95,13 +99,39 @@ async def create_follow_up(
 
     draft = await call_structured(FOLLOW_UP_SYSTEM_PROMPT, user_content, RecommendationDraft)
 
+    # 생성된 것은 후보일 뿐이다(P-3). 검수 단계가 서로 같은 주제인 후보, 이미 세운
+    # 계획과 겹치는 후보, 단정적·위험한 표현을 걸러낸다.
+    options = [option.model_dump() for option in draft.options]
+    existing_titles = list(
+        await db.scalars(
+            select(PlanItem.title).where(
+                PlanItem.user_id == user.id,
+                PlanItem.status.in_(
+                    [PlanItemStatus.PLANNED.value, PlanItemStatus.IN_PROGRESS.value]
+                ),
+            )
+        )
+    )
+    reviews = review_options(options, existing_plan_titles=existing_titles)
+    kept = [option for option, review in zip(options, reviews, strict=True) if review.passed]
+
+    # 전부 탈락하면 학생에게 보여줄 것이 없어진다. 그럴 때는 걸러내지 않고 그대로
+    # 두되, 무엇이 걸렸는지는 로그로 남긴다 — 빈 화면보다 흠 있는 선택지가 낫다.
+    if not kept:
+        logger.warning(
+            "recommendation review rejected every option: user_id=%s flags=%s",
+            user.id,
+            [r.flags for r in reviews],
+        )
+        kept = options
+
     recommendation = Recommendation(
         user_id=user.id,
         source_activity_id=activity.id,
         desired_activity_type=(
             data.desired_activity_type.value if data.desired_activity_type else None
         ),
-        options=[option.model_dump() for option in draft.options],
+        options=kept,
     )
     db.add(recommendation)
     await db.commit()

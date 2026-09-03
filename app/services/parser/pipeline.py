@@ -15,7 +15,7 @@ from app.services.parser.grades import (
     parse_academic_performance,
     parse_academic_performance_from_text,
 )
-from app.services.parser.llm import build_client, parse_block
+from app.services.parser.llm import get_provider, parse_block
 from app.services.parser.prompts import (
     CHANGCHE_SYSTEM_PROMPT,
     HAENGBAL_SYSTEM_PROMPT,
@@ -97,7 +97,7 @@ async def _run_llm_jobs(jobs: list[_LLMJob]) -> tuple[list[ActivityItem], list[P
     if not jobs:
         return [], []
 
-    client = build_client()
+    client = get_provider()
     semaphore = asyncio.Semaphore(settings.seteuk_llm_concurrency)
 
     async def _run(job: _LLMJob) -> tuple[_LLMJob, tuple]:

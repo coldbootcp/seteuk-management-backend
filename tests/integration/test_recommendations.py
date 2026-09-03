@@ -10,10 +10,17 @@ CAPTURED: dict[str, str] = {}
 async def _fake_follow_up(system_prompt: str, user_content: str, response_model: type):
     assert response_model is RecommendationDraft
     CAPTURED["user_content"] = user_content
+    # 세 선택지는 난이도·접근이 서로 달라야 한다는 것이 명세다. 표현만 다른 같은
+    # 주제를 내면 Reviewer가 걸러내므로, fake도 실제처럼 서로 다른 주제를 낸다.
+    topics = [
+        "실측 데이터로 지수함수 모델 검증",
+        "로지스틱 곡선과 비교해 포화 구간 해석",
+        "설문으로 이용자 체감 대기시간 조사",
+    ]
     return RecommendationDraft(
         options=[
             {
-                "topic": f"후속 주제 {index}",
+                "topic": topic,
                 "connection_reason": "원래 활동의 한계에서 출발했다.",
                 "subject_relevance": "수학Ⅰ 지수함수 단원과 연결된다.",
                 "career_relevance": "AI 연구원 진로와 맞닿아 있다.",
@@ -23,7 +30,7 @@ async def _fake_follow_up(system_prompt: str, user_content: str, response_model:
                 "expected_output": "검증 보고서",
                 "expansion_potential": "3학년에 시뮬레이션으로 확장 가능.",
             }
-            for index in range(3)
+            for topic in topics
         ]
     )
 
@@ -103,7 +110,7 @@ async def test_adopting_option_creates_plan_linked_to_source_activity(
     )
     assert adopted.status_code == 201
     plan = adopted.json()
-    assert plan["title"] == "후속 주제 1"
+    assert plan["title"] == "로지스틱 곡선과 비교해 포화 구간 해석"
     assert plan["origin"] == "recommendation"
     assert plan["source_activity_id"] == activity_id
     assert plan["source_recommendation_id"] == recommendation_id
@@ -198,3 +205,59 @@ async def test_feedback_is_scoped_to_its_owner(
         headers=other,
     )
     assert response.status_code == 404
+
+
+async def test_review_drops_an_option_that_repeats_an_existing_plan(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """생성된 추천은 후보일 뿐이다(P-3). 이미 세운 계획을 다시 제안하면 학생에게는
+    새 선택지가 아니므로 검수 단계가 걸러낸다."""
+    await client.post(
+        "/api/v1/plans",
+        json={"item_type": "activity", "title": "실측 데이터로 지수함수 모델 검증"},
+        headers=auth_headers,
+    )
+    activity_id = await _create_activity(client, auth_headers)
+
+    created = await client.post(
+        "/api/v1/recommendations/follow-up",
+        json={"source_activity_id": activity_id},
+        headers=auth_headers,
+    )
+    topics = [o["topic"] for o in created.json()["options"]]
+    assert "실측 데이터로 지수함수 모델 검증" not in topics
+    assert len(topics) == 2
+
+
+async def test_every_option_rejected_still_shows_something(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """검수가 전부 떨어뜨리면 화면이 비어 버린다. 빈 화면보다 흠 있는 선택지가 낫다."""
+
+    async def _all_unsafe(system_prompt: str, user_content: str, response_model: type):
+        return RecommendationDraft(
+            options=[
+                {
+                    "topic": "무조건 합격하는 탐구",
+                    "connection_reason": "이 활동이면 서울대에 합격할 수 있습니다.",
+                    "subject_relevance": "x",
+                    "career_relevance": "x",
+                    "record_potential": "x",
+                    "difficulty": "medium",
+                    "materials": [],
+                    "expected_output": "x",
+                    "expansion_potential": "x",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(recommendation_service, "call_structured", _all_unsafe)
+    activity_id = await _create_activity(client, auth_headers)
+
+    created = await client.post(
+        "/api/v1/recommendations/follow-up",
+        json={"source_activity_id": activity_id},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    assert len(created.json()["options"]) == 1

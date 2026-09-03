@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # processing 상태로 이 시간을 넘긴 job은 프로세스가 죽은 것으로 보고 실패 처리한다.
     stale_job_timeout_minutes: int = 30
 
+    # 모델 프로바이더는 하네스 경계 뒤에 있다(P-3). 지금 붙어 있는 것은
+    # DeepSeek 하나지만, 호출부를 바꾸지 않고 교체할 수 있어야 한다.
+    llm_provider: str = "deepseek"
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"

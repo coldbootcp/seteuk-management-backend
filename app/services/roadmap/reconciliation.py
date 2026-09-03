@@ -8,36 +8,10 @@
 없을 때 생기는 시간 기반 이벤트라, `run_semester_checkpoint`가 따로 만든다.
 """
 
-import re
 from dataclasses import dataclass
 
 from app.models.roadmap import MatchType, RoadmapNode
-
-_TOKEN_SPLIT = re.compile(r"[^가-힣a-zA-Z0-9]+")
-MIN_TOKEN_LENGTH = 2
-
-
-def _tokens(text: str) -> set[str]:
-    return {t.lower() for t in _TOKEN_SPLIT.split(text) if len(t) >= MIN_TOKEN_LENGTH}
-
-
-def _overlap(activity_text: str, node_text: str) -> int:
-    """두 텍스트가 몇 개의 어휘를 공유하는지.
-
-    참조 구현은 토큰을 정확히 일치시켰는데, 한국어는 교착어라 조사·어미가 붙으면
-    같은 말이 다른 토큰이 된다 — "분석"과 "분석해", "물리학"과 "물리학을"이 겹치지
-    않는 것으로 세어져 점수가 실제보다 훨씬 낮게 나왔다. 한쪽이 다른 쪽의 접두사면
-    같은 어휘로 본다.
-    """
-    activity_tokens = _tokens(activity_text)
-    matched = 0
-    for node_token in _tokens(node_text):
-        if any(
-            token.startswith(node_token) or node_token.startswith(token)
-            for token in activity_tokens
-        ):
-            matched += 1
-    return matched
+from app.services.korean_text import overlap_count
 
 
 @dataclass(frozen=True)
@@ -74,7 +48,7 @@ def judge(
     node_text = " ".join(
         [node.title, node.objective, *node.candidate_subjects, *node.competency_goals]
     )
-    overlap = _overlap(activity_text, node_text)
+    overlap = overlap_count(activity_text, node_text)
 
     lowered = activity_text.lower()
     career_signal = any(term and term.lower() in lowered for term in career_terms)
