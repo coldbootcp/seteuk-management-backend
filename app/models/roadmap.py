@@ -19,7 +19,7 @@ class RoadmapStatus(StrEnum):
 
 
 class RoadmapNodeStatus(StrEnum):
-    PENDING = "pending"
+    PLANNED = "planned"
     ACTIVE = "active"
     PARTIAL = "partial"
     DONE = "done"
@@ -91,7 +91,7 @@ class RoadmapNode(Base):
     candidate_subjects: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     competency_goals: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=RoadmapNodeStatus.PENDING.value
+        String(20), nullable=False, default=RoadmapNodeStatus.PLANNED.value
     )
     instantiated_activity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
@@ -99,6 +99,14 @@ class RoadmapNode(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class PlanEventPriority(StrEnum):
+    """core는 그 학기에 꼭 남겨야 하는 주제, optional은 학교 기회가 맞을 때 고르는
+    확장 주제. 학생이 전부 하는 것이 아니라 골라 담는 목록이다."""
+
+    CORE = "core"
+    OPTIONAL = "optional"
 
 
 class RoadmapPlanEvent(Base):
@@ -123,7 +131,11 @@ class RoadmapPlanEvent(Base):
     month_day: Mapped[str] = mapped_column(String(10), nullable=False)
     category: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     subject: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    priority: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=PlanEventPriority.CORE.value
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

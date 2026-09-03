@@ -72,6 +72,16 @@ class PlanItemNotFoundError(AppError):
     error_code = "PLAN_ITEM_NOT_FOUND"
 
 
+class RoadmapNotFoundError(AppError):
+    status_code = 404
+    error_code = "ROADMAP_NOT_FOUND"
+
+
+class RoadmapNodeNotFoundError(AppError):
+    status_code = 404
+    error_code = "ROADMAP_NODE_NOT_FOUND"
+
+
 class InvalidPlanTransitionError(AppError):
     status_code = 409
     error_code = "INVALID_PLAN_TRANSITION"
