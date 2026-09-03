@@ -135,7 +135,9 @@ Base URL: `/api/v1`
 
 **POST /seteuk/uploads** (multipart/form-data, `file`) → 201 `{ upload_id, status }`
 파싱이 끝나면 결과가 6개 도메인 테이블에 자동 반영된다. 별도 확인/적용 단계는 없다.
-PDF 원본은 저장하지 않는다.
+**업로드한 PDF 원본은 계정에 보관된다**(통합 결정 P-1 — 예전 방침을 뒤집었다).
+학생이 나중에 자기가 올린 파일을 다시 확인할 수 있어야 하기 때문이다. 원본은
+진단·챗봇 컨텍스트에 절대 싣지 않으며, `GET /seteuk/uploads/{id}/file`로 내려받는다.
 
 파싱된 기록 중 사용자가 선언한 현재 학년-학기(`users.current_grade`/
 `current_semester`)보다 **이후 시점의 기록은 저장하지 않는다**(온보딩 전이라
@@ -460,6 +462,27 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 ```
 선택지를 계획으로 담는다. 계획은 추천의 출처 활동을 물려받아, 나중에 완료하면 그
 활동의 자식으로 기록된다.
+
+### 3.7b 첨부파일 & 추천 피드백
+
+**POST /activities/{activity_id}/attachments** (multipart, `file`) → 201
+활동에 파일을 붙인다(수행평가 안내문, 보고서 등). 10MB까지. PDF면 본문 텍스트를
+추출해 `extracted_text`로 보관한다 — 추출에 실패해도 첨부 자체는 성공한다.
+LLM 컨텍스트에는 추출 텍스트만 실리고 파일 본문은 싣지 않는다.
+
+**GET /activities/{activity_id}/attachments** → 목록(본문 제외)
+**GET /activities/attachments/{id}/file** → 내려받기
+**DELETE /activities/attachments/{id}** → 204
+
+**POST /recommendations/{id}/feedback** → 201
+```json
+{ "option_index": 0, "action": "saved | rejected", "reason": "string 또는 null" }
+```
+추천 선택지에 대한 반응. **append-only다** — 같은 선택지에 마음이 바뀌어도 이전
+기록을 고치지 않고 새 행을 쌓는다. "저장했다가 나중에 거절했다"는 것 자체가 다음
+추천의 신호이기 때문이다.
+
+**GET /recommendations/feedback/history** → 최신순 이력
 
 ### 3.8 AI 챗봇
 

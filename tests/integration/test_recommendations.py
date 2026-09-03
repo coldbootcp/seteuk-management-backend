@@ -130,3 +130,71 @@ async def test_adopting_out_of_range_option_is_rejected(
         headers=auth_headers,
     )
     assert response.status_code == 404
+
+
+async def _new_recommendation(client: AsyncClient, headers: dict[str, str]) -> str:
+    activity_id = await _create_activity(client, headers)
+    created = await client.post(
+        "/api/v1/recommendations/follow-up",
+        json={"source_activity_id": activity_id},
+        headers=headers,
+    )
+    return created.json()["id"]
+
+
+async def test_feedback_is_append_only(client: AsyncClient, auth_headers: dict[str, str]) -> None:
+    """마음이 바뀌어도 이전 기록을 고치지 않고 새 행을 쌓는다 — "저장했다가 나중에
+    거절했다"는 것 자체가 다음 추천의 신호이기 때문이다."""
+    recommendation_id = await _new_recommendation(client, auth_headers)
+
+    first = await client.post(
+        f"/api/v1/recommendations/{recommendation_id}/feedback",
+        json={"option_index": 0, "action": "saved"},
+        headers=auth_headers,
+    )
+    assert first.status_code == 201
+
+    await client.post(
+        f"/api/v1/recommendations/{recommendation_id}/feedback",
+        json={"option_index": 0, "action": "rejected", "reason": "생각보다 범위가 넓다"},
+        headers=auth_headers,
+    )
+
+    history = (
+        await client.get("/api/v1/recommendations/feedback/history", headers=auth_headers)
+    ).json()
+    # 같은 선택지에 대한 두 기록이 모두 남는다(최신이 먼저).
+    assert [f["action"] for f in history] == ["rejected", "saved"]
+    assert history[0]["reason"] == "생각보다 범위가 넓다"
+
+
+async def test_feedback_rejects_an_option_index_that_does_not_exist(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    recommendation_id = await _new_recommendation(client, auth_headers)
+
+    response = await client.post(
+        f"/api/v1/recommendations/{recommendation_id}/feedback",
+        json={"option_index": 9, "action": "saved"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "RECOMMENDATION_NOT_FOUND"
+
+
+async def test_feedback_is_scoped_to_its_owner(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    recommendation_id = await _new_recommendation(client, auth_headers)
+    signup = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "other-feedback@example.com", "password": "s3cure-passw0rd"},
+    )
+    other = {"Authorization": f"Bearer {signup.json()['access_token']}"}
+
+    response = await client.post(
+        f"/api/v1/recommendations/{recommendation_id}/feedback",
+        json={"option_index": 0, "action": "saved"},
+        headers=other,
+    )
+    assert response.status_code == 404

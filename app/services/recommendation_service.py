@@ -16,6 +16,7 @@ from app.models.activity import Activity
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemOrigin, PlanItemStatus
 from app.models.recommendation import Recommendation
+from app.models.recommendation_feedback import RecommendationFeedback
 from app.models.user import User
 from app.schemas.recommendation import (
     AdoptOptionRequest,
@@ -147,3 +148,49 @@ async def adopt_option(
     await db.commit()
     await db.refresh(plan)
     return plan
+
+
+# --- 추천 피드백 — append-only 개인화 신호 ---
+
+
+async def record_feedback(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    recommendation_id: uuid.UUID,
+    option_index: int,
+    action: str,
+    reason: str | None,
+) -> RecommendationFeedback:
+    """선택지에 대한 반응을 남긴다.
+
+    같은 선택지에 대해 마음이 바뀌어도 이전 기록을 고치지 않고 새 행을 쌓는다 —
+    "저장했다가 나중에 거절했다"는 것 자체가 신호이기 때문이다. 최신 의견이 필요한
+    화면은 created_at으로 마지막 것을 읽으면 된다.
+    """
+    recommendation = await get_recommendation(db, user_id, recommendation_id)
+    if not 0 <= option_index < len(recommendation.options):
+        raise RecommendationNotFoundError("해당 선택지를 찾을 수 없습니다")
+
+    feedback = RecommendationFeedback(
+        user_id=user_id,
+        recommendation_id=recommendation_id,
+        option_index=option_index,
+        action=action,
+        reason=reason,
+    )
+    db.add(feedback)
+    await db.commit()
+    await db.refresh(feedback)
+    return feedback
+
+
+async def list_feedback(
+    db: AsyncSession, user_id: uuid.UUID, limit: int = 200
+) -> list[RecommendationFeedback]:
+    rows = await db.scalars(
+        select(RecommendationFeedback)
+        .where(RecommendationFeedback.user_id == user_id)
+        .order_by(RecommendationFeedback.created_at.desc())
+        .limit(limit)
+    )
+    return list(rows)

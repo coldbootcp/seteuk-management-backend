@@ -17,11 +17,27 @@ from app.schemas.seteuk import ParseError, SeteukAnalysisResult
 from app.services.parser.pipeline import parse_seteuk_pdf
 
 
-async def create_upload(db: AsyncSession, user_id: uuid.UUID, file_bytes: bytes) -> SeteukUpload:
+async def create_upload(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    file_bytes: bytes,
+    file_name: str | None = None,
+    content_type: str | None = None,
+) -> SeteukUpload:
+    """업로드 원본을 계정에 보관한다(통합 결정 P-1). 예전 방침은 "PDF 원본은 저장하지
+    않는다"였지만, 학생이 나중에 자기가 올린 파일을 다시 확인할 수 있어야 한다는
+    판단으로 뒤집었다. 원본은 파싱 결과와 달리 진단·챗봇 컨텍스트에 절대 싣지 않는다."""
     if not file_bytes.startswith(b"%PDF"):
         raise UnsupportedFileError("텍스트 PDF만 지원합니다")
 
-    upload = SeteukUpload(user_id=user_id, status=UploadStatus.PROCESSING.value)
+    upload = SeteukUpload(
+        user_id=user_id,
+        status=UploadStatus.PROCESSING.value,
+        file_name=file_name,
+        content_type=content_type,
+        size_bytes=len(file_bytes),
+        content=file_bytes,
+    )
     db.add(upload)
     await db.commit()
     await db.refresh(upload)
@@ -173,3 +189,14 @@ async def get_result(
     if upload.status != UploadStatus.DONE.value or upload.raw_result is None:
         raise UploadNotReadyError("파싱이 완료되지 않았습니다")
     return SeteukAnalysisResult.model_validate(upload.raw_result)
+
+
+async def get_upload_file(
+    db: AsyncSession, user_id: uuid.UUID, upload_id: uuid.UUID
+) -> SeteukUpload:
+    """원본 내려받기용 조회. 파싱이 실패했어도 원본은 돌려준다 — 무엇을 올렸는지
+    확인하는 것이 실패 원인을 짚는 첫걸음이기 때문이다."""
+    upload = await get_upload(db, user_id, upload_id)
+    if upload.content is None:
+        raise UploadNotFoundError("보관된 원본이 없습니다")
+    return upload

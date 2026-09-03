@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.attachments import router as attachments_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.diagnosis import router as diagnosis_router
@@ -17,6 +18,7 @@ api_router.include_router(profile_router)
 api_router.include_router(diagnosis_router)
 for record_router in record_routers:
     api_router.include_router(record_router)
+api_router.include_router(attachments_router)
 api_router.include_router(plans_router)
 api_router.include_router(roadmaps_router)
 api_router.include_router(recommendations_router)

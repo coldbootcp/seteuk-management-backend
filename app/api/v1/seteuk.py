@@ -1,7 +1,8 @@
 from typing import Annotated
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -24,7 +25,9 @@ async def create_upload(
 ) -> UploadCreateResponse:
     await enforce_daily_limit(db, user.id, UsageAction.SETEUK_UPLOAD)
     file_bytes = await file.read()
-    upload = await seteuk_service.create_upload(db, user.id, file_bytes)
+    upload = await seteuk_service.create_upload(
+        db, user.id, file_bytes, file_name=file.filename, content_type=file.content_type
+    )
     background_tasks.add_task(seteuk_service.run_parse_job, upload.id, file_bytes)
     return UploadCreateResponse(upload_id=upload.id, status=upload.status)
 
@@ -46,3 +49,19 @@ async def get_upload_result(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SeteukAnalysisResult:
     return await seteuk_service.get_result(db, user.id, upload_id)
+
+
+@router.get("/uploads/{upload_id}/file")
+async def download_upload_file(
+    upload_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """업로드한 생기부 원본 내려받기."""
+    upload = await seteuk_service.get_upload_file(db, user.id, upload_id)
+    file_name = upload.file_name or f"{upload.id}.pdf"
+    return Response(
+        content=upload.content,
+        media_type=upload.content_type or "application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{quote(file_name)}"'},
+    )
