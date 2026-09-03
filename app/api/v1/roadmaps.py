@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.roadmap import Roadmap
 from app.models.usage_event import UsageAction
 from app.models.user import User
+from app.schemas.records import AcademicPerformanceRead
 from app.schemas.roadmap import (
     ReconciliationLogRead,
     RoadmapGenerateRequest,
@@ -121,3 +122,20 @@ async def run_checkpoint(
     아니라 시간이 흘러서 생기는 판정이라 별도 경로다. 남길 것이 없으면 null."""
     log = await roadmap_service.run_semester_checkpoint(db, user)
     return ReconciliationLogRead.model_validate(log) if log else None
+
+
+@router.get("/nodes/{node_id}/courses", response_model=list[AcademicPerformanceRead])
+async def list_node_courses(
+    node_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[AcademicPerformanceRead]:
+    """이 학기 마디를 위해 듣는 과목들.
+
+    별도 테이블을 두지 않고 `academic_performance`에 `roadmap_node_id`를 붙이는
+    방식이다(D-3). 성적 레코드를 둘로 나누면 진단의 학기별 평균 석차등급이 어느
+    쪽을 봐야 할지 모호해지기 때문이다 — 과목은 하나고, 로드맵 연결은 그 과목에
+    붙는 속성이다.
+    """
+    rows = await roadmap_service.list_node_courses(db, user.id, node_id)
+    return [AcademicPerformanceRead.model_validate(row) for row in rows]

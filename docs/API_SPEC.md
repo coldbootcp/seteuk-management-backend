@@ -417,6 +417,14 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 **GET /roadmaps/active** · **GET /roadmaps/{id}** · **POST /roadmaps/{id}/confirm**
 (draft → active) · **PATCH /roadmaps/nodes/{id}** (학생이 제목·목표를 직접 수정)
 
+**수강 과목** — 학기 마디에 어떤 과목을 듣는지는 **별도 테이블이 아니라**
+`academic_performance`의 `roadmap_node_id`로 표현한다(D-3). 성적 레코드를 둘로 나누면
+진단의 학기별 평균 석차등급이 어느 쪽을 봐야 할지 모호해지기 때문이다 — 과목은
+하나고, 로드맵 연결은 그 과목에 붙는 속성이다. 과목 추가·성적 입력·메모는 전부
+기존 `/academic-performance` CRUD로 하고, 마디별 조회만 편의 경로를 둔다.
+
+**GET /roadmaps/nodes/{node_id}/courses** → 그 마디에 걸린 과목 목록
+
 **정합(Reconciliation)** — 활동을 저장하면(`POST /activities`) 그 자리에서 활성
 노드와 대조해 판정을 남긴다. 로드맵이 없으면 조용히 넘어간다.
 

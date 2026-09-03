@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import RoadmapNodeNotFoundError, RoadmapNotFoundError
+from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.roadmap import (
     MatchType,
@@ -357,5 +358,20 @@ async def list_reconciliations(
         .where(ReconciliationLog.user_id == user_id)
         .order_by(ReconciliationLog.created_at.desc())
         .limit(limit)
+    )
+    return list(rows)
+
+
+async def list_node_courses(
+    db: AsyncSession, user_id: uuid.UUID, node_id: uuid.UUID
+) -> list[AcademicPerformance]:
+    """학기 마디에 걸린 수강 과목. 소유권은 user_id로 먼저 좁힌다."""
+    rows = await db.scalars(
+        select(AcademicPerformance)
+        .where(
+            AcademicPerformance.user_id == user_id,
+            AcademicPerformance.roadmap_node_id == node_id,
+        )
+        .order_by(AcademicPerformance.subject.asc())
     )
     return list(rows)

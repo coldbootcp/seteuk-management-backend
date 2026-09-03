@@ -70,6 +70,10 @@ class AcademicPerformanceCreate(BaseModel):
     subject_average: float | None = None
     std_deviation: float | None = None
     rank: str | None = None
+    note: str | None = None
+    # 이 과목이 어느 로드맵 마디를 위한 수강인지(D-3). 생기부 파싱으로 들어온
+    # 행은 비어 있고, 학생이 로드맵에서 과목을 고를 때 채워진다.
+    roadmap_node_id: uuid.UUID | None = None
 
 
 class AcademicPerformanceUpdate(BaseModel):
@@ -84,6 +88,10 @@ class AcademicPerformanceUpdate(BaseModel):
     subject_average: float | None = None
     std_deviation: float | None = None
     rank: str | None = None
+    note: str | None = None
+    # 이 과목이 어느 로드맵 마디를 위한 수강인지(D-3). 생기부 파싱으로 들어온
+    # 행은 비어 있고, 학생이 로드맵에서 과목을 고를 때 채워진다.
+    roadmap_node_id: uuid.UUID | None = None
 
 
 class AcademicPerformanceRead(RecordBase):
@@ -98,6 +106,8 @@ class AcademicPerformanceRead(RecordBase):
     subject_average: float | None
     std_deviation: float | None
     rank: str | None
+    note: str | None
+    roadmap_node_id: uuid.UUID | None
 
 
 # --- 독서 활동 ------------------------------------------------------------

@@ -348,3 +348,48 @@ async def test_checkpoint_does_not_pile_up_duplicate_misses(
         await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
     ).json()
     assert [h["match_type"] for h in history] == ["MISS"]
+
+
+async def test_courses_attach_to_a_semester_node_without_a_second_grade_table(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """수강 과목은 별도 테이블이 아니라 academic_performance에 roadmap_node_id를
+    붙이는 방식이다(D-3). 성적 레코드를 둘로 나누면 진단의 학기별 평균 석차등급이
+    어느 쪽을 봐야 할지 모호해진다 — 과목은 하나고, 로드맵 연결은 그 속성이다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    node = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    created = await client.post(
+        "/api/v1/academic-performance",
+        json={
+            "grade": node["grade"],
+            "semester": node["semester"],
+            "category": "과학",
+            "subject": "물리학Ⅰ",
+            "roadmap_node_id": node["id"],
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    assert created.json()["roadmap_node_id"] == node["id"]
+
+    listed = await client.get(
+        f"/api/v1/roadmaps/nodes/{node['id']}/courses", headers=auth_headers
+    )
+    assert [c["subject"] for c in listed.json()] == ["물리학Ⅰ"]
+
+    # 성적과 메모는 같은 행을 고쳐서 넣는다.
+    updated = await client.patch(
+        f"/api/v1/academic-performance/{created.json()['id']}",
+        json={"rank": "2", "raw_score": 91, "note": "시험 범위가 달랐음"},
+        headers=auth_headers,
+    )
+    assert updated.json()["rank"] == "2"
+    assert updated.json()["note"] == "시험 범위가 달랐음"
+
+    # 같은 행이므로 진단의 성적 추이도 이 점수를 그대로 본다.
+    listed = await client.get(
+        f"/api/v1/roadmaps/nodes/{node['id']}/courses", headers=auth_headers
+    )
+    assert listed.json()[0]["rank"] == "2"

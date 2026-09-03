@@ -42,6 +42,8 @@ class AcademicPerformance(Base):
     roadmap_node_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roadmap_nodes.id", ondelete="SET NULL"), nullable=True
     )
+    # 학생이 성적에 붙이는 짧은 메모(시험 범위가 달랐다는 등).
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     rank: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
