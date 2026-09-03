@@ -65,6 +65,11 @@ class Activity(Base):
     )
     # 이 활동이 어떤 이전 활동을 고도화한 것인지 — 3년 계보 추적의 기록 쪽 절반.
     # plan_items를 거쳐 완료된 활동은 계획의 source_activity_id가 여기로 복사된다.
+    # 이 활동이 속한 주제(진로 사슬의 단위). parent_activity_id와 다른 축이다 —
+    # 주제는 "어느 갈래인가", parent는 "그 갈래 안에서 무엇을 직접 이어받았는가".
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activity_threads.id", ondelete="SET NULL"), nullable=True
+    )
     parent_activity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
     )

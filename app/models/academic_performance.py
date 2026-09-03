@@ -37,6 +37,11 @@ class AcademicPerformance(Base):
     raw_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     subject_average: Mapped[float | None] = mapped_column(Float, nullable=True)
     std_deviation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 이 과목이 어느 로드맵 노드를 위한 수강인지(D-3). 생기부 파싱으로 들어온
+    # 행은 비어 있고, 학생이 로드맵에서 과목을 고를 때 채워진다.
+    roadmap_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roadmap_nodes.id", ondelete="SET NULL"), nullable=True
+    )
     rank: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
