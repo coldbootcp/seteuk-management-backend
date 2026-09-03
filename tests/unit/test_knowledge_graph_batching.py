@@ -164,3 +164,49 @@ async def test_duplicate_and_self_links_are_dropped(monkeypatch: pytest.MonkeyPa
     links = await pipeline._write_knowledge_graph_batch([a, b], {})
 
     assert [link.relation_label for link in links] == ["진짜 연결"]
+
+
+async def test_thread_entries_are_sorted_even_when_the_llm_returns_them_jumbled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """갈래는 "흐름"으로 읽히는 것이 전부라 순서가 어긋나면 의미가 무너진다.
+    프롬프트가 학년-학기 순을 요구해도 실제 응답이 뒤섞여 오는 것을 관측했다."""
+    from app.schemas.diagnosis import CareerThreadDraft
+
+    draft = CareerThreadDraft(
+        career_thread=[
+            {
+                "title": "갈래",
+                "summary": "요약",
+                "activity_indexes": [],
+                "entries": [
+                    {"grade": 2, "semester": 1, "type": "completed", "theme": "나중",
+                     "source": "s", "connection": "c"},
+                    {"grade": 1, "semester": None, "type": "completed", "theme": "학년단위",
+                     "source": "s", "connection": "c"},
+                    {"grade": 1, "semester": 2, "type": "completed", "theme": "먼저",
+                     "source": "s", "connection": "c"},
+                ],
+            }
+        ]
+    )
+
+    class _FakeDb:
+        async def scalars(self, *a, **kw):
+            return []
+
+        async def execute(self, *a, **kw):
+            return None
+
+        async def delete(self, *a, **kw):
+            return None
+
+        def add(self, *a, **kw):
+            return None
+
+        async def flush(self):
+            return None
+
+    threads = await pipeline._persist_threads(_FakeDb(), uuid.uuid4(), draft, {})
+
+    assert [e.theme for e in threads[0].entries] == ["학년단위", "먼저", "나중"]

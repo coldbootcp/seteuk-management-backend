@@ -115,19 +115,47 @@ async def get_domain_rows(db: AsyncSession, user_id: uuid.UUID) -> dict[str, lis
     }
 
 
-async def get_career_thread_material(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
-    """진로 유기적 평가 섹션의 입력. 활동은 학기 유무와 무관하게 전부(계보용
-    parent_activity_id 포함) 넘기고, 수상/봉사도 후보 재료로 함께 준다 — 이 중
-    무엇을 사슬에 넣을지는 LLM이 진로 관련성으로 판단한다."""
-    activities = await db.scalars(select(Activity).where(Activity.user_id == user_id))
+@dataclass
+class CareerThreadMaterial:
+    """진로 사슬 입력과, 응답의 index를 실제 활동으로 되돌리기 위한 대응표."""
+
+    payload: dict[str, Any]
+    index_of_activity: dict[int, Activity]
+
+
+async def get_career_thread_material(
+    db: AsyncSession, user_id: uuid.UUID
+) -> CareerThreadMaterial:
+    """진로 유기적 평가 섹션의 입력. 활동은 학기 유무와 무관하게 전부 넘기고,
+    수상/봉사도 후보 재료로 함께 준다 — 이 중 무엇을 갈래에 넣을지는 LLM이 진로
+    관련성으로 판단한다.
+
+    활동에는 그 호출 안에서만 유효한 정수 index를 붙인다. 어느 활동이 어느 갈래에
+    속하는지를 LLM이 UUID로 되돌려주게 하면 한 글자만 틀려도 응답 전체가 무효가 되기
+    때문이다(활동 인벤토리에서 실제로 겪은 사고다).
+    """
+    activities = list(
+        await db.scalars(
+            select(Activity)
+            .where(Activity.user_id == user_id)
+            .order_by(Activity.grade, Activity.semester.nullsfirst(), Activity.created_at)
+        )
+    )
     awards = await db.scalars(select(Award).where(Award.user_id == user_id))
     volunteer = await db.scalars(select(VolunteerRecord).where(VolunteerRecord.user_id == user_id))
 
-    return {
-        "activities": [serialize_row(r) for r in activities],
-        "awards": [serialize_row(r) for r in awards],
-        "volunteer_records": [serialize_row(r) for r in volunteer],
-    }
+    index_of_activity = dict(enumerate(activities, start=1))
+    return CareerThreadMaterial(
+        payload={
+            "activities": [
+                {"index": index, **serialize_row(activity)}
+                for index, activity in index_of_activity.items()
+            ],
+            "awards": [serialize_row(r) for r in awards],
+            "volunteer_records": [serialize_row(r) for r in volunteer],
+        },
+        index_of_activity=index_of_activity,
+    )
 
 
 async def get_activities_by_grade(

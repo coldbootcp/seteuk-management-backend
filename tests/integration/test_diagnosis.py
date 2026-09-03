@@ -1,10 +1,14 @@
 import json
+import uuid
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 import app.services.diagnosis.pipeline as pipeline
 import app.services.diagnosis_service as diagnosis_service
+from app.models.activity import Activity
+from app.models.activity_thread import ActivityThread
 from app.schemas.diagnosis import (
     ActivityInventoryDraft,
     CareerThreadDraft,
@@ -20,12 +24,21 @@ from tests.conftest import TestSessionLocal
 FAKE_CAREER_THREAD = CareerThreadDraft(
     career_thread=[
         {
-            "grade": 1,
-            "semester": 1,
-            "type": "completed",
-            "theme": "테스트 활동",
-            "source": "활동: 테스트",
-            "connection": "다음 단계로 이어짐",
+            "title": "테스트 갈래",
+            "summary": "테스트 활동에서 시작한 갈래입니다.",
+            # 입력 activities에 붙은 정수 index. 1은 실제 활동, 99는 LLM이 지어낸
+            # 값을 흉내 낸 것으로 조용히 버려져야 한다.
+            "activity_indexes": [1, 99],
+            "entries": [
+                {
+                    "grade": 1,
+                    "semester": 1,
+                    "type": "completed",
+                    "theme": "테스트 활동",
+                    "source": "활동: 테스트",
+                    "connection": "다음 단계로 이어짐",
+                }
+            ],
         }
     ]
 )
@@ -206,7 +219,10 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     assert review["activities_review"] == "이 학기 활동 평가입니다."
 
     # 진로 유기적 평가
-    assert body["career_thread"][0]["theme"] == "테스트 활동"
+    # 진로 사슬은 주제별 갈래로 묶인다 — 시간순 평면 배열이 아니다.
+    thread = body["career_thread"][0]
+    assert thread["title"] == "테스트 갈래"
+    assert thread["entries"][0]["theme"] == "테스트 활동"
 
     # 활동 인벤토리 — 필터링 없이 활동 2개 전량에 분류가 매겨진다.
     inventory_ids = {e["activity_id"] for e in body["activity_inventory"]}
@@ -268,3 +284,37 @@ async def test_diagnosis_requires_auth(client: AsyncClient) -> None:
     response = await client.post("/api/v1/diagnosis")
 
     assert response.status_code == 401
+
+
+async def test_threads_are_persisted_and_linked_to_activities(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """진로 사슬은 진단 출력으로만 끝나지 않고 activity_threads에 남고 활동에
+    thread_id가 붙는다 — 갈래는 지속되는 구조라야 이후 지식 그래프·챗봇이 "같은
+    갈래인가"를 물을 수 있다."""
+    created = await client.post(
+        "/api/v1/activities",
+        json={
+            "grade": 1,
+            "semester": 1,
+            "activity_category": "과목세부특기사항",
+            "activity_name": "테스트",
+            "activity_type": "report",
+            "description": "설명",
+        },
+        headers=auth_headers,
+    )
+    activity_id = created.json()["id"]
+
+    diagnosis_id = (
+        await client.post("/api/v1/diagnosis", headers=auth_headers)
+    ).json()["diagnosis_id"]
+    await client.get(f"/api/v1/diagnosis/{diagnosis_id}", headers=auth_headers)
+
+    async with TestSessionLocal() as db:
+        threads = list(await db.scalars(select(ActivityThread)))
+        assert [t.title for t in threads] == ["테스트 갈래"]
+
+        activity = await db.get(Activity, uuid.UUID(activity_id))
+        # index 1은 실제 활동이라 연결되고, LLM이 지어낸 99는 조용히 버려진다.
+        assert activity.thread_id == threads[0].id

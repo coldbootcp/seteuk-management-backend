@@ -204,8 +204,10 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   "semester_reviews": [{ "grade": 2, "semester": 1,
                          "grades_review": "…", "reading_review": "…",
                          "activities_review": "…" }],
-  "career_thread": [{ "grade": 1, "semester": "1 또는 null", "type": "completed",
-                      "theme": "…", "source": "…", "connection": "…" }],
+  "career_thread": [{ "title": "버스 배차 최적화", "summary": "…",
+                      "entries": [{ "grade": 1, "semester": "1 또는 null",
+                                    "type": "completed", "theme": "…",
+                                    "source": "…", "connection": "…" }] }],
   "activity_inventory": [{ "activity_id": "uuid", "grade": 2, "semester": 1,
                            "competency": "전공관련교과역량", "depth_level": "심화탐구",
                            "headline": "베벨기어 설계 및 발표" }],
@@ -237,7 +239,13 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 - **`semester_reviews`** — 학기당 1회 LLM 호출. **그 학기의** 성적/독서/활동
   원자료만 입력받아 세 개의 독립된 텍스트로 낸다. 자료가 없는 측면은 억지로
   채우지 않고 정직하게 "기록이 없다"고 쓴다.
-- **`career_thread`** — 활동 전체(계보 `parent_activity_id` 포함) + 수상 + 봉사를
+- **`career_thread`** — **주제별 갈래의 목록**이다. 학생은 보통 여러 갈래를 동시에
+  굴리므로(로봇 만들기 / 데이터 분석 / 지역 봉사), 시간순 평면 배열로 늘어놓으면
+  무엇이 무엇의 심화인지 읽히지 않는다. 각 갈래는 제목·요약과 학년-학기 순으로
+  정렬된 `entries`를 갖는다(정렬은 코드가 보증한다). 갈래는 진단 출력으로 끝나지
+  않고 `activity_threads`에 저장되며 `activities.thread_id`가 채워진다.
+
+  활동 전체(계보 `parent_activity_id` 포함) + 수상 + 봉사를
   함께 입력받는 1회 호출. 진로 관점에서 의미 있는 것만 사슬에 올리므로(중요하지
   않은 건 자동으로 빠짐), 활동뿐 아니라 수상·봉사도 노드가 될 수 있다. 과거
   (`completed`)와 학생의 현재 학년-학기 이후 제안(`suggested`)이 학년-학기 순으로

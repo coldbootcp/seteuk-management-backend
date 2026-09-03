@@ -3,13 +3,16 @@ import json
 import uuid
 from typing import Any
 
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
+from app.models.activity_thread import ActivityThread
 from app.models.user import User
 from app.schemas.diagnosis import (
     ActivityInventoryDraft,
     ActivityInventoryEntry,
+    CareerThread,
     CareerThreadDraft,
     CareerThreadEntry,
     ExtractedInterestsResult,
@@ -24,6 +27,7 @@ from app.schemas.diagnosis import (
     SemesterReviewDraft,
 )
 from app.services.diagnosis.data import (
+    CareerThreadMaterial,
     SemesterGroup,
     compute_grades_trend,
     get_activities_by_grade,
@@ -100,23 +104,85 @@ async def _review_semester(group: SemesterGroup, interests: dict[str, Any]) -> S
 
 
 async def _write_career_thread(
-    material: dict[str, Any], interests: dict[str, Any], current_grade: int | None,
+    material: CareerThreadMaterial,
+    interests: dict[str, Any],
+    current_grade: int | None,
     current_semester: int | None,
-) -> list[CareerThreadEntry]:
-    """진로 유기적 평가 — 활동/수상/봉사 전체를 입력받아, 진로 관점에서 의미 있는
-    것만 사슬로 엮는다. 학기별 평가와 달리 전체 이력을 한 번에 봐야 '연결'을
-    판단할 수 있으므로 학기 단위로 쪼개지 않는다."""
+) -> CareerThreadDraft:
+    """진로 유기적 평가 — 활동/수상/봉사 전체를 입력받아 **주제별 갈래**로 엮는다.
+
+    학기별 평가와 달리 전체 이력을 한 번에 봐야 '연결'을 판단할 수 있으므로 학기
+    단위로 쪼개지 않는다. 시간순 평면 배열이 아니라 갈래로 묶는 이유는, 학생이 보통
+    여러 주제를 동시에 굴리기 때문이다 — 한 줄에 섞어 놓으면 무엇이 무엇의 심화인지
+    읽히지 않는다.
+    """
     user_content = json.dumps(
         {
             "career_context": interests,
             "current_grade": current_grade,
             "current_semester": current_semester,
-            **material,
+            **material.payload,
         },
         ensure_ascii=False,
     )
-    draft = await call_structured(CAREER_THREAD_SYSTEM_PROMPT, user_content, CareerThreadDraft)
-    return draft.career_thread
+    return await call_structured(CAREER_THREAD_SYSTEM_PROMPT, user_content, CareerThreadDraft)
+
+
+async def _persist_threads(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    draft: CareerThreadDraft,
+    index_of_activity: dict[int, Activity],
+) -> list[CareerThread]:
+    """갈래를 activity_threads에 남기고 활동에 thread_id를 붙인다.
+
+    진단은 다시 돌릴 때마다 갈래를 새로 판단하므로, 이전 진단이 만든 갈래는 지우고
+    새로 만든다. 학생이 직접 만든 갈래를 덮어쓰지 않도록 **진단이 만든 것만** 지운다
+    (지금은 전부 진단이 만들지만, 수동 생성이 생겨도 이 경계가 유지되도록 표시를
+    남겨 둔다).
+    """
+    previous = list(
+        await db.scalars(select(ActivityThread).where(ActivityThread.user_id == user_id))
+    )
+    for thread in previous:
+        # 활동은 남기고 연결만 끊는다 — 갈래는 해석이고 활동은 사실이다.
+        await db.execute(
+            update(Activity)
+            .where(Activity.thread_id == thread.id)
+            .values(thread_id=None)
+        )
+        await db.delete(thread)
+
+    result: list[CareerThread] = []
+    for drafted in draft.career_thread:
+        thread = ActivityThread(
+            user_id=user_id, title=drafted.title, description=drafted.summary
+        )
+        db.add(thread)
+        await db.flush()
+
+        for index in drafted.activity_indexes:
+            activity = index_of_activity.get(index)
+            # LLM이 지어낸 index는 조용히 버린다 — 정수라 오타가 나도 범위 검사만으로
+            # 걸러지고, 응답 전체가 무효가 되지 않는다.
+            if activity is not None:
+                activity.thread_id = thread.id
+
+        result.append(
+            CareerThread(
+                title=drafted.title,
+                summary=drafted.summary,
+                # 프롬프트가 학년-학기 순을 요구하지만 실제 응답에서 뒤섞여 나오는 것을
+                # 관측했다. 갈래는 "흐름"으로 읽히는 것이 전부라 순서가 어긋나면 의미가
+                # 무너지므로 코드에서 보증한다. 학기가 없는 노드(자율활동 등)는 그 학년
+                # 안에서 맨 앞에 둔다.
+                entries=sorted(
+                    drafted.entries, key=lambda e: (e.grade, e.semester if e.semester else 0)
+                ),
+            )
+        )
+
+    return result
 
 
 async def _classify_activity_batch(
@@ -318,7 +384,7 @@ async def run_diagnosis_pipeline(
 ) -> tuple[
     GradesTrend,
     list[SemesterReview],
-    list[CareerThreadEntry],
+    list[CareerThread],
     list[ActivityInventoryEntry],
     list[KnowledgeGraphLink],
     OverallAssessmentDraft,
@@ -336,7 +402,7 @@ async def run_diagnosis_pipeline(
     # 겹치지 않는 독립 섹션이라 함께 병렬 실행한다(전부 LLM 호출만, db 접근 없음).
     (
         semester_reviews,
-        career_thread,
+        career_thread_draft,
         inventory_batches,
         knowledge_graph_links,
     ) = await asyncio.gather(
@@ -357,6 +423,13 @@ async def run_diagnosis_pipeline(
     )
     semester_reviews = list(semester_reviews)
     activity_inventory = [entry for batch in inventory_batches for entry in batch]
+
+    # 갈래를 실제 데이터로 남긴다(activity_threads + activities.thread_id). 진단
+    # 출력만이 아니라 지속되는 구조라, 이후 지식 그래프·챗봇이 "같은 갈래인가"를
+    # 물을 수 있다. LLM 호출이 아니라 DB 쓰기라 병렬 구간 밖에서 순차로 처리한다.
+    career_thread = await _persist_threads(
+        db, user_id, career_thread_draft, career_material.index_of_activity
+    )
 
     # 종합 평가는 위 세 섹션의 결과만 보고 판단한다 — 원본 데이터를 다시 훑지 않는다.
     overall = await _write_overall_assessment(semester_reviews, career_thread, activity_inventory)

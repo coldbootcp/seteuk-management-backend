@@ -83,6 +83,26 @@ class CareerThreadEntry(BaseModel):
 # --- 활동 인벤토리 섹션 — 활동을 역량 축으로 분류(필터링 없음, 전량 커버 목표) ---
 
 
+class CareerThread(BaseModel):
+    """진로 사슬 하나 = **하나의 주제가 흐르는 갈래**.
+
+    예전에는 사슬이 학년-학기 순으로 늘어선 평면 배열이었다. 그러면 학생이 동시에
+    굴리는 여러 갈래(예: 로봇 만들기 / 데이터 분석 / 봉사)가 한 줄에 뒤섞여, 무엇이
+    무엇의 심화인지 읽히지 않았다. 주제를 단위로 묶으면 각 갈래가 자기 흐름을 갖는다.
+    """
+
+    title: str
+    summary: str
+    entries: list[CareerThreadEntry] = []
+
+
+class CareerThreadDraftThread(CareerThread):
+    """LLM이 돌려주는 형태. 어떤 활동이 이 갈래에 속하는지를 **정수 index**로 받는다 —
+    UUID를 베끼게 하면 한 글자만 틀려도 응답 전체가 무효가 되기 때문이다."""
+
+    activity_indexes: list[int] = []
+
+
 class ActivityInventoryEntry(BaseModel):
     activity_id: UUID
     grade: int
@@ -117,7 +137,7 @@ class DiagnosisResult(BaseModel):
     status: DiagnosisStatus
     grades_trend: GradesTrend | None = None
     semester_reviews: list[SemesterReview] = []
-    career_thread: list[CareerThreadEntry] = []
+    career_thread: list[CareerThread] = []
     activity_inventory: list[ActivityInventoryEntry] = []
     knowledge_graph_links: list[KnowledgeGraphLink] = []
     # 종합 평가 — semester_reviews/career_thread/activity_inventory의 결과만
@@ -147,7 +167,7 @@ class SemesterReviewDraft(BaseModel):
 
 
 class CareerThreadDraft(BaseModel):
-    career_thread: list[CareerThreadEntry]
+    career_thread: list[CareerThreadDraftThread]
 
 
 class ActivityInventoryDraftEntry(BaseModel):

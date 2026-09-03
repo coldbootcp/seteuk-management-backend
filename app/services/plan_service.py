@@ -291,12 +291,15 @@ async def get_roadmap_overview(db: AsyncSession, user: User) -> RoadmapOverview:
         )
     )
 
+    # 진로 사슬은 주제별 갈래의 목록이다. 그랜드 로드맵은 갈래 구분 없이 시간축
+    # 하나에 마일스톤을 놓는 화면이므로 여기서는 노드를 펼쳐서 쓴다.
     career_thread = diagnosis.career_thread or [] if diagnosis else []
-    completed_nodes = [n for n in career_thread if n["type"] == "completed"]
+    nodes = [entry for thread in career_thread for entry in thread.get("entries", [])]
+    completed_nodes = [n for n in nodes if n["type"] == "completed"]
     # suggested는 반드시 특정 미래 학기를 겨냥해야 마일스톤에 배치할 수 있다 —
     # 자율활동처럼 학기가 없는 근거를 든 노드(semester가 null)는 여기서 못 쓴다.
     suggested_nodes = [
-        n for n in career_thread if n["type"] == "suggested" and n["semester"] is not None
+        n for n in nodes if n["type"] == "suggested" and n["semester"] is not None
     ]
 
     # 자율활동/진로활동처럼 학기 없이 학년 단위로만 존재하는 근거를 든 노드는
