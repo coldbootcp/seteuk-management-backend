@@ -81,7 +81,7 @@ async def list_plan_events(db: AsyncSession, roadmap_id: uuid.UUID) -> list[Road
     rows = await db.scalars(
         select(RoadmapPlanEvent)
         .where(RoadmapPlanEvent.roadmap_id == roadmap_id)
-        .order_by(RoadmapPlanEvent.month_day.asc())
+        .order_by(RoadmapPlanEvent.node_id, RoadmapPlanEvent.order_index.asc())
     )
     return list(rows)
 

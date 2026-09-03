@@ -152,3 +152,45 @@ async def test_roadmap_is_scoped_to_its_owner(
     response = await client.get(f"/api/v1/roadmaps/{body['id']}", headers=other)
     assert response.status_code == 404
     assert response.json()["error_code"] == "ROADMAP_NOT_FOUND"
+
+
+async def test_topic_titles_use_the_right_korean_particle(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """조사는 앞말 받침에 따라 달라진다. 참조 구현은 항상 "와"를 붙여 받침 있는
+    관심 분야에서 "데이터분석와"처럼 틀린 문구가 나왔다 — 학생에게 보이는 글이다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+
+    # 받침이 있는 관심 분야("석") → 과
+    body = (
+        await client.post("/api/v1/roadmaps", json={"focus": "데이터분석"}, headers=auth_headers)
+    ).json()
+    titles = [e["title"] for e in body["nodes"][0]["plan_events"]]
+    assert any("데이터분석과 현재 교과의 연결" in t for t in titles)
+    assert not any("데이터분석와" in t for t in titles)
+
+    # 받침이 없는 관심 분야("자") → 와
+    body = (
+        await client.post("/api/v1/roadmaps", json={"focus": "광소자"}, headers=auth_headers)
+    ).json()
+    titles = [e["title"] for e in body["nodes"][0]["plan_events"]]
+    assert any("광소자와 현재 교과의 연결" in t for t in titles)
+    assert not any("광소자과" in t for t in titles)
+
+
+async def test_topic_order_is_stable_across_requests(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """같은 달에 여러 주제가 몰리므로, 순번 없이 month_day로만 정렬하면 새로고침할
+    때마다 목록 순서가 바뀐다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+    created = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+
+    first = [e["title"] for e in created["nodes"][0]["plan_events"]]
+    again = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    assert [e["title"] for e in again["nodes"][0]["plan_events"]] == first
+
+    # core 4개가 optional보다 앞에 온다.
+    priorities = [e["priority"] for e in created["nodes"][0]["plan_events"]]
+    assert priorities[:4] == ["core"] * 4
+    assert set(priorities[4:]) == {"optional"}

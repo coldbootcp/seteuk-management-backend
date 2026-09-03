@@ -127,6 +127,9 @@ class RoadmapPlanEvent(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
+    # 노드 안에서 읽는 순서. 같은 달에 여러 주제가 몰리므로 이게 없으면 목록
+    # 순서가 요청마다 뒤바뀐다.
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # "03-15"처럼 연도 없는 월-일. 학년이 노드에 있으므로 연도는 중복이다.
     month_day: Mapped[str] = mapped_column(String(10), nullable=False)
     category: Mapped[str] = mapped_column(String(50), nullable=False, default="")

@@ -9,6 +9,7 @@ class RoadmapPlanEventRead(BaseModel):
 
     id: uuid.UUID
     node_id: uuid.UUID
+    order_index: int
     month_day: str
     category: str
     subject: str

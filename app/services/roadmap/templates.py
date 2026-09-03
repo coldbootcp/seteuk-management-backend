@@ -23,7 +23,9 @@ class NarrativeStage:
     competencies: list[str] = field(default_factory=list)
 
 
-TEMPLATE_ID = "semiconductor-narrative-v1"
+# 참조 구현은 이 값이 "semiconductor-narrative-v1"이었지만, 실제 단계 정의는
+# 도메인 중립(GENERIC_ROADMAP_STAGES)이다. 이름이 내용을 잘못 말하고 있어 고쳤다.
+TEMPLATE_ID = "generic-narrative-v1"
 
 NARRATIVE_STAGES: list[NarrativeStage] = [
     NarrativeStage(
@@ -106,6 +108,23 @@ RETROSPECT_TITLE = "기존 활동 기록"
 RETROSPECT_OBJECTIVE = "생기부 연동을 통해 과거 활동을 확인하세요."
 
 
+def _has_final_consonant(word: str) -> bool:
+    """마지막 글자에 받침이 있는지. 한글 음절은 (초성×21 + 중성)×28 + 종성으로
+    이루어져 있어서, 28로 나눈 나머지가 0이 아니면 받침이 있다."""
+    if not word:
+        return False
+    last = word[-1]
+    if not ("\uac00" <= last <= "\ud7a3"):
+        # 한글이 아니면(영문·숫자로 끝나는 관심 분야) 받침 없는 쪽으로 읽어 준다.
+        return False
+    return (ord(last) - 0xAC00) % 28 != 0
+
+
+def with_particle(word: str, with_final: str, without_final: str) -> str:
+    """받침에 맞는 조사를 붙인다 — "데이터분석과", "광소자와"."""
+    return f"{word}{with_final if _has_final_consonant(word) else without_final}"
+
+
 def active_index(grade: int, semester: int) -> int:
     """학생의 현재 학년-학기가 6개 마디 중 몇 번째인지. 범위를 벗어나면 양 끝으로 붙인다."""
     return max(0, min(len(NARRATIVE_STAGES) - 1, (grade - 1) * 2 + (semester - 1)))
@@ -128,7 +147,7 @@ def suggested_topics(focus: str, stage: NarrativeStage) -> list[dict[str, str]]:
         ),
         (
             "core",
-            f"{focus}에서 {competency}을(를) 보여줄 수 있는 비교 질문",
+            f"{focus}에서 {with_particle(competency, '을', '를')} 보여줄 수 있는 비교 질문",
             "조건이 다른 사례를 비교해 어떤 기준으로 판단해야 하는지 탐구하는 주제입니다.",
         ),
         (
@@ -139,7 +158,7 @@ def suggested_topics(focus: str, stage: NarrativeStage) -> list[dict[str, str]]:
         ),
         (
             "core",
-            f"{focus}와 현재 교과의 연결 고리 찾기",
+            f"{with_particle(focus, '과', '와')} 현재 교과의 연결 고리 찾기",
             f"현재 {subject}에서 배우는 개념을 출발점으로 진로 관심을 자연스럽게 연결하는 "
             "주제입니다.",
         ),
@@ -150,7 +169,7 @@ def suggested_topics(focus: str, stage: NarrativeStage) -> list[dict[str, str]]:
         ),
         (
             "optional",
-            f"{focus}가 해결하는 문제와 남는 문제",
+            f"{with_particle(focus, '이', '가')} 해결하는 문제와 남는 문제",
             "기술의 장점만 소개하지 않고 해결되지 않은 문제를 함께 정의해 보는 주제입니다.",
         ),
         (
@@ -160,7 +179,7 @@ def suggested_topics(focus: str, stage: NarrativeStage) -> list[dict[str, str]]:
         ),
         (
             "optional",
-            f"{focus}와 인접 분야의 공통점과 차이",
+            f"{with_particle(focus, '과', '와')} 인접 분야의 공통점과 차이",
             "인접 전공 또는 교과와 비교해 자신의 관심 분야를 더 구체화하는 주제입니다.",
         ),
         (
@@ -177,6 +196,9 @@ def suggested_topics(focus: str, stage: NarrativeStage) -> list[dict[str, str]]:
 
     return [
         {
+            # 같은 달에 여러 주제가 몰리므로 순번을 함께 저장한다. 없으면 새로고침할
+            # 때마다 목록 순서가 바뀐다.
+            "order_index": index,
             # 주제가 학기 초부터 두 달에 걸쳐 퍼지도록 앞의 셋만 월을 밀고 나머지는
             # 같은 달에 둔다(원본 프로토타입과 같은 배치).
             "month_day": f"{start_month + min(index, 2):02d}-15",
