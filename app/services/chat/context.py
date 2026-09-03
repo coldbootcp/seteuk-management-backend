@@ -72,14 +72,26 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .limit(MAX_GRADES)
         )
     )
+    # 상한에 걸릴 때 어떤 행이 남는지가 정렬에 달려 있다. ORDER BY가 없으면 DB가
+    # 임의로 고른 30건이 실려, 같은 질문에 매번 다른 근거를 드는 챗봇이 된다.
+    # 다른 영역과 마찬가지로 최신 것부터 남긴다.
     awards = list(
         await db.scalars(
-            select(Award).where(Award.user_id == user.id).limit(MAX_AWARDS)
+            select(Award)
+            .where(Award.user_id == user.id)
+            .order_by(Award.date.desc().nullslast(), Award.created_at.desc())
+            .limit(MAX_AWARDS)
         )
     )
     volunteer = list(
         await db.scalars(
-            select(VolunteerRecord).where(VolunteerRecord.user_id == user.id).limit(MAX_VOLUNTEER)
+            select(VolunteerRecord)
+            .where(VolunteerRecord.user_id == user.id)
+            .order_by(
+                VolunteerRecord.grade.desc(),
+                VolunteerRecord.date.desc().nullslast(),
+            )
+            .limit(MAX_VOLUNTEER)
         )
     )
     attendance = list(
@@ -158,7 +170,13 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
         "awards": [{"name": a.name, "rank": a.rank, "date": a.date.isoformat() if a.date else None}
                    for a in awards],
         "volunteer_records": [
-            {"grade": v.grade, "place": v.place, "content": v.content, "hours": v.hours}
+            {
+                "grade": v.grade,
+                "date": v.date.isoformat() if v.date else None,
+                "place": v.place,
+                "content": v.content,
+                "hours": v.hours,
+            }
             for v in volunteer
         ],
         "attendance": [

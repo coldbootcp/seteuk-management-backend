@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import datetime as dt
 import uuid
 from typing import Any
 
@@ -40,6 +41,18 @@ def _uuid(value: Any) -> uuid.UUID | None:
         return None
     try:
         return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _date(value: Any) -> dt.date | None:
+    """LLM이 준 ISO 날짜를 정규화한다. "날짜는 항상 ISO 8601로 정규화하고 원문은
+    raw_date에 보존한다"는 원칙을 챗봇 경로에서도 지키기 위한 것 — 해석에 실패하면
+    조용히 버린다(원문은 어차피 raw_date에 남는다)."""
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
 
@@ -98,8 +111,15 @@ async def _update_activity(db: AsyncSession, user: User, args: dict[str, Any]) -
 
 async def _add_award(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
     row = await record_service.create_record(
-        db, Award, user.id, {"name": args["name"], "rank": args.get("rank"),
-                             "raw_date": args.get("raw_date")}
+        db,
+        Award,
+        user.id,
+        {
+            "name": args["name"],
+            "rank": args.get("rank"),
+            "date": _date(args.get("date")),
+            "raw_date": args.get("raw_date"),
+        },
     )
     return {"award_id": str(row.id), "name": row.name}
 
@@ -111,6 +131,7 @@ async def _add_volunteer(db: AsyncSession, user: User, args: dict[str, Any]) -> 
         user.id,
         {
             "grade": args.get("grade") or user.current_grade,
+            "date": _date(args.get("date")),
             "place": args.get("place"),
             "content": args.get("content"),
             "hours": args.get("hours"),
@@ -304,8 +325,15 @@ TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
         "add_award",
         "수상 경력을 추가한다.",
-        {"name": {"type": "string"}, "rank": {"type": "string"},
-         "raw_date": {"type": "string", "description": "학생이 말한 날짜 표현 원문"}},
+        {
+            "name": {"type": "string"},
+            "rank": {"type": "string"},
+            "date": {
+                "type": "string",
+                "description": "ISO 8601 날짜(YYYY-MM-DD). 학생이 정확한 날짜를 말한 경우에만",
+            },
+            "raw_date": {"type": "string", "description": "학생이 말한 날짜 표현 원문"},
+        },
         ["name"],
     ),
     _tool(
@@ -315,7 +343,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "place": {"type": "string"},
             "content": {"type": "string"},
             "hours": {"type": "integer"},
-            "raw_date": {"type": "string"},
+            "date": {
+                "type": "string",
+                "description": "ISO 8601 날짜(YYYY-MM-DD). 학생이 정확한 날짜를 말한 경우에만",
+            },
+            "raw_date": {"type": "string", "description": "학생이 말한 날짜 표현 원문"},
             "grade": _GRADE,
         },
         [],

@@ -8,13 +8,15 @@
 tools.py에 삭제 도구를 두지 않아 대화만으로 기록이 사라지는 일은 없다.
 """
 
+import asyncio
 import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConversationNotFoundError, LLMUnavailableError
@@ -80,6 +82,52 @@ def _sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+async def _touch(db: AsyncSession, conversation_id: uuid.UUID) -> None:
+    """대화 목록은 updated_at 내림차순으로 보여준다. 그런데 메시지를 추가해도
+    conversations 행 자체는 UPDATE되지 않아 onupdate가 걸리지 않는다 — 명시적으로
+    갱신하지 않으면 첫 메시지 이후로 시각이 얼어붙어, 방금 대화한 방이 목록 맨
+    아래에 남는다.
+
+    ORM 객체의 속성을 대입하지 않고 UPDATE를 직접 실행하는 이유는, commit 뒤
+    만료된 인스턴스에 대입하면 예전 값을 읽으려는 지연 로드가 걸려 스트리밍
+    제너레이터 안에서 MissingGreenlet으로 터지기 때문이다."""
+    await db.execute(
+        update(Conversation)
+        .where(Conversation.id == conversation_id)
+        .values(updated_at=datetime.now(UTC))
+    )
+
+
+async def _persist_assistant_turn(
+    db: AsyncSession,
+    conversation_id: uuid.UUID,
+    mode: ChatMode,
+    answer: str,
+    applied_actions: list[dict[str, Any]],
+) -> Message | None:
+    """답변과 실행된 도구를 저장한다. 스트림이 도중에 끊겨도 반드시 불러야 한다 —
+    도구는 이미 DB를 바꿔 놓은 뒤라, 여기서 저장하지 않으면 기록은 바뀌었는데
+    무엇이 바뀌었는지 아무 데도 남지 않는다.
+
+    아무것도 만들어지지 않았으면(내용도 도구 실행도 없음) 빈 답변을 남기지 않는다.
+    """
+    if not answer and not applied_actions:
+        return None
+
+    message = Message(
+        conversation_id=conversation_id,
+        role=MessageRole.ASSISTANT.value,
+        content=answer,
+        mode=mode.value,
+        applied_actions=applied_actions or None,
+    )
+    db.add(message)
+    await _touch(db, conversation_id)
+    await db.commit()
+    await db.refresh(message)
+    return message
+
+
 def _merge_tool_call_deltas(
     accumulator: dict[int, dict[str, Any]], deltas: list[Any]
 ) -> None:
@@ -108,7 +156,12 @@ async def stream_reply(
             yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
             return
 
-        conversation = await get_conversation(db, user_id, conversation_id)
+        try:
+            conversation = await get_conversation(db, user_id, conversation_id)
+        except ConversationNotFoundError as exc:
+            # 라우터에서 확인한 뒤 스트림이 시작되기까지 사이에 지워질 수 있다.
+            yield _sse("error", {"error_code": "CONVERSATION_NOT_FOUND", "message": exc.message})
+            return
 
         # 스트림이 도중에 끊겨도 학생이 한 말은 남아야 하므로 먼저 저장한다.
         user_message = Message(
@@ -119,7 +172,8 @@ async def stream_reply(
         )
         db.add(user_message)
         if conversation.title is None:
-            conversation.title = content[:TITLE_LIMIT]
+            conversation.title = " ".join(content.split())[:TITLE_LIMIT]
+        await _touch(db, conversation_id)
         await db.commit()
 
         history = await db.scalars(
@@ -146,6 +200,7 @@ async def stream_reply(
         tools = TOOL_SPECS if mode == ChatMode.EDIT else None
         applied_actions: list[dict[str, Any]] = []
         answer_parts: list[str] = []
+        error_payload: dict[str, Any] | None = None
 
         try:
             for _ in range(MAX_TOOL_ROUNDS):
@@ -212,29 +267,37 @@ async def stream_reply(
                 logger.warning(
                     "chat tool loop hit the round limit: conversation_id=%s", conversation_id
                 )
+        except asyncio.CancelledError:
+            # 사용자가 창을 닫거나 요청을 취소한 경우. 도구가 이미 실행돼 DB를 바꿔
+            # 놓았을 수 있으므로, 취소가 저장까지 함께 끊지 않도록 shield로 감싼다.
+            await asyncio.shield(
+                _persist_assistant_turn(
+                    db, conversation_id, mode, "".join(answer_parts), applied_actions
+                )
+            )
+            raise
         except LLMUnavailableError as exc:
-            yield _sse("error", {"error_code": "LLM_UNAVAILABLE", "message": exc.message})
-            return
+            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
         except Exception:
             logger.exception("chat stream failed: conversation_id=%s", conversation_id)
-            yield _sse(
-                "error",
-                {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해주세요"},
-            )
-            return
+            error_payload = {
+                "error_code": "LLM_UNAVAILABLE",
+                "message": "잠시 후 다시 시도해주세요",
+            }
 
-        assistant_message = Message(
-            conversation_id=conversation_id,
-            role=MessageRole.ASSISTANT.value,
-            content="".join(answer_parts),
-            mode=mode.value,
-            applied_actions=applied_actions or None,
+        # 실패했더라도 여기까지 흘린 답변과 실행된 도구는 반드시 남긴다.
+        assistant_message = await _persist_assistant_turn(
+            db, conversation_id, mode, "".join(answer_parts), applied_actions
         )
-        db.add(assistant_message)
-        await db.commit()
-        await db.refresh(assistant_message)
+
+        if error_payload is not None:
+            yield _sse("error", error_payload)
+            return
 
         yield _sse(
             "done",
-            {"message_id": str(assistant_message.id), "applied_actions": applied_actions},
+            {
+                "message_id": str(assistant_message.id) if assistant_message else None,
+                "applied_actions": applied_actions,
+            },
         )

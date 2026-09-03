@@ -7,6 +7,7 @@ import pytest
 from httpx import AsyncClient
 
 import app.services.chat_service as chat_service
+from app.core.exceptions import LLMUnavailableError
 from tests.conftest import TestSessionLocal
 
 
@@ -276,3 +277,79 @@ async def test_text_before_and_after_a_tool_call_is_kept_separate(
     )
     # 저장된 본문도 스트리밍된 것과 같아야 한다.
     assert messages.json()[1]["content"] == streamed
+
+
+async def test_conversation_moves_to_the_top_after_a_later_message(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """대화 목록은 최근 순이어야 한다. 메시지를 추가해도 conversations 행은
+    UPDATE되지 않아 onupdate가 안 걸리므로, 명시적으로 갱신하지 않으면 첫 메시지
+    이후 시각이 얼어붙어 방금 대화한 방이 목록 아래에 남는다."""
+    _install_stream(monkeypatch, [[_chunk("네.")]])
+    older = await _new_conversation(client, auth_headers)
+    newer = await _new_conversation(client, auth_headers)
+
+    # 나중에 만든 대화가 먼저 온다.
+    listed = await client.get("/api/v1/conversations", headers=auth_headers)
+    assert [c["id"] for c in listed.json()["items"]][0] == newer
+
+    # 오래된 대화에 두 번 말을 건다(첫 메시지는 제목을 넣느라 행을 건드리므로,
+    # 갱신이 정말 매 턴 일어나는지 보려면 두 번째 턴까지 봐야 한다).
+    for _ in range(2):
+        _install_stream(monkeypatch, [[_chunk("네.")]])
+        await client.post(
+            f"/api/v1/conversations/{older}/messages",
+            json={"content": "안녕하세요", "mode": "normal"},
+            headers=auth_headers,
+        )
+
+    listed = await client.get("/api/v1/conversations", headers=auth_headers)
+    assert [c["id"] for c in listed.json()["items"]][0] == older
+
+
+async def test_tool_actions_survive_a_stream_failure(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """도구가 실행된 뒤 LLM이 죽어도, 도구는 이미 DB를 바꿔 놓은 상태다. 답변과
+    applied_actions를 저장하지 않으면 기록은 바뀌었는데 무엇이 바뀌었는지 아무 데도
+    남지 않는다."""
+
+    async def failing_stream(messages, tools=None):
+        # 1라운드: 도구를 부르고, 그 결과를 받은 2라운드에서 터진다.
+        if not any(m.get("role") == "tool" for m in messages):
+            yield _chunk("기록할게요.")
+            yield _chunk(
+                tool_calls=[
+                    _tool_call_delta(
+                        0, "call_1", "add_reading", '{"title": "코스모스", "grade": 2}'
+                    )
+                ]
+            )
+            return
+        raise LLMUnavailableError("일시적 오류")
+        yield  # pragma: no cover - 제너레이터로 만들기 위한 도달 불가 코드
+
+    monkeypatch.setattr(chat_service, "stream_chat", failing_stream)
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    response = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        json={"content": "코스모스 읽었어요", "mode": "edit"},
+        headers=auth_headers,
+    )
+    events = _parse_sse(response.text)
+    assert [e for e, _ in events][-1] == "error"
+
+    # 독서 기록은 실제로 만들어졌다.
+    readings = await client.get("/api/v1/reading-activities", headers=auth_headers)
+    assert [r["title"] for r in readings.json()["items"]] == ["코스모스"]
+
+    # 그리고 그 사실이 대화에도 남아 있다.
+    messages = (
+        await client.get(
+            f"/api/v1/conversations/{conversation_id}/messages", headers=auth_headers
+        )
+    ).json()
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "기록할게요."
+    assert [a["tool"] for a in messages[-1]["applied_actions"]] == ["add_reading"]
