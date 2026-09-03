@@ -11,7 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import RoadmapNodeNotFoundError, RoadmapNotFoundError
+from app.models.activity import Activity
 from app.models.roadmap import (
+    MatchType,
+    ReconciliationLog,
     Roadmap,
     RoadmapNode,
     RoadmapNodeStatus,
@@ -20,6 +23,7 @@ from app.models.roadmap import (
 )
 from app.models.user import User
 from app.schemas.profile import FieldKey
+from app.services.roadmap.reconciliation import judge
 from app.services.roadmap.templates import (
     NARRATIVE_STAGES,
     RETROSPECT_OBJECTIVE,
@@ -188,3 +192,170 @@ async def confirm_roadmap(db: AsyncSession, user_id: uuid.UUID, roadmap_id: uuid
     await db.commit()
     await db.refresh(roadmap)
     return roadmap
+
+
+# --- 정합(Reconciliation) — 활동이 로드맵의 어디에 해당하는지 판정하고 진척을 옮긴다 ---
+
+
+async def _career_terms(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
+    """정합 신호로 쓸 학생 자신의 진로 어휘. 원본 프로토타입이 반도체 단어를
+    하드코딩했던 자리를 대신한다."""
+    interests = await get_current_interests(db, user_id)
+    terms: list[str] = list(interests.get(FieldKey.INTEREST_KEYWORDS) or [])
+    department = interests.get(FieldKey.TARGET_DEPARTMENT)
+    if department:
+        terms.append(department)
+    goal = interests.get(FieldKey.CAREER_GOAL) or {}
+    if isinstance(goal, dict) and goal.get("goal"):
+        terms.append(goal["goal"])
+    return terms
+
+
+async def _active_node(db: AsyncSession, roadmap_id: uuid.UUID) -> RoadmapNode | None:
+    return await db.scalar(
+        select(RoadmapNode)
+        .where(
+            RoadmapNode.roadmap_id == roadmap_id,
+            RoadmapNode.status == RoadmapNodeStatus.ACTIVE.value,
+        )
+        .order_by(RoadmapNode.order_index.asc())
+        .limit(1)
+    )
+
+
+async def _advance(db: AsyncSession, node: RoadmapNode, finished_status: str) -> None:
+    """현재 노드를 닫고 다음 노드를 활성화한다. 다음 노드가 이미 지나간
+    학기(skipped)면 건너뛰고 그다음을 찾는다."""
+    node.status = finished_status
+    following = await db.scalars(
+        select(RoadmapNode)
+        .where(
+            RoadmapNode.roadmap_id == node.roadmap_id,
+            RoadmapNode.order_index > node.order_index,
+            RoadmapNode.status == RoadmapNodeStatus.PLANNED.value,
+        )
+        .order_by(RoadmapNode.order_index.asc())
+        .limit(1)
+    )
+    following_node = following.first()
+    if following_node is not None:
+        following_node.status = RoadmapNodeStatus.ACTIVE.value
+
+
+async def reconcile_activity(
+    db: AsyncSession, user_id: uuid.UUID, activity: Activity
+) -> ReconciliationLog | None:
+    """활동 하나를 활성 로드맵과 대조한다. 로드맵이 아직 없으면 아무것도 하지 않는다 —
+    로드맵을 만들기 전에 기록부터 쌓는 사용자를 막을 이유가 없다."""
+    roadmap = await get_active_roadmap(db, user_id)
+    if roadmap is None:
+        return None
+
+    node = await _active_node(db, roadmap.id)
+    verdict = judge(
+        activity_text=" ".join(
+            [
+                activity.activity_name,
+                activity.description or "",
+                activity.subject or "",
+                *(activity.keywords or []),
+            ]
+        ),
+        activity_subject=activity.subject or "",
+        node=node,
+        career_terms=await _career_terms(db, user_id),
+    )
+
+    log = ReconciliationLog(
+        user_id=user_id,
+        activity_id=activity.id,
+        roadmap_id=roadmap.id,
+        node_id=node.id if node else None,
+        match_type=verdict.match_type,
+        rationale=verdict.rationale,
+        action=verdict.action,
+        confidence=verdict.confidence,
+    )
+    db.add(log)
+
+    if node is not None:
+        if verdict.match_type == MatchType.MATCH.value:
+            node.instantiated_activity_id = activity.id
+            await _advance(db, node, RoadmapNodeStatus.DONE.value)
+        elif verdict.match_type == MatchType.PARTIAL_MATCH.value:
+            await _advance(db, node, RoadmapNodeStatus.PARTIAL.value)
+
+    await db.commit()
+    await db.refresh(log)
+    return log
+
+
+async def run_semester_checkpoint(db: AsyncSession, user: User) -> ReconciliationLog | None:
+    """학기 체크포인트 — 이미 지나간(또는 지금 끝나는) 학기의 활성 노드에 완료 활동이
+    없으면 MISS를 남긴다.
+
+    MISS는 다른 판정과 달리 활동을 저장할 때가 아니라 **시간이 흘러서** 생긴다.
+    그래서 여기서 노드 상태를 바꾸지 않는다 — 이월할지 건너뛸지는 학생이 정한다.
+    """
+    roadmap = await get_active_roadmap(db, user.id)
+    if roadmap is None:
+        return None
+    node = await _active_node(db, roadmap.id)
+    if node is None:
+        return None
+
+    # 아직 오지 않은 학기를 놓쳤다고 할 수는 없다. 활동이 노드를 충족해 다음 노드가
+    # 활성화된 직후에도 체크포인트가 돌 수 있으므로, 시점 비교가 없으면 미래 학기에
+    # 곧바로 MISS가 찍힌다.
+    current = ((user.current_grade or 1), (user.current_semester or 1))
+    if (node.grade, node.semester) > current:
+        return None
+
+    logged = await db.scalar(
+        select(ReconciliationLog)
+        .where(
+            ReconciliationLog.node_id == node.id,
+            ReconciliationLog.match_type.in_(
+                [
+                    MatchType.MATCH.value,
+                    MatchType.PARTIAL_MATCH.value,
+                    # 같은 노드에 MISS를 두 번 남기지 않는다 — 체크포인트는 여러 번
+                    # 호출될 수 있다.
+                    MatchType.MISS.value,
+                ]
+            ),
+        )
+        .limit(1)
+    )
+    if logged is not None:
+        return None
+
+    log = ReconciliationLog(
+        user_id=user.id,
+        activity_id=None,
+        roadmap_id=roadmap.id,
+        node_id=node.id,
+        match_type=MatchType.MISS.value,
+        rationale=(
+            f"'{node.title}' 학기가 지나가는 동안 이 노드를 충족하는 활동이 기록되지 "
+            "않았습니다."
+        ),
+        action="다음 학기로 이월할지 건너뛸지 학생이 결정",
+        confidence=70,
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+    return log
+
+
+async def list_reconciliations(
+    db: AsyncSession, user_id: uuid.UUID, limit: int = 100
+) -> list[ReconciliationLog]:
+    rows = await db.scalars(
+        select(ReconciliationLog)
+        .where(ReconciliationLog.user_id == user_id)
+        .order_by(ReconciliationLog.created_at.desc())
+        .limit(limit)
+    )
+    return list(rows)

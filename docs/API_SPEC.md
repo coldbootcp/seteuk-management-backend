@@ -392,6 +392,39 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 것은 그 학년 안에서 맨 앞으로 정렬되고, `suggested` 노드는 학기가 없으면
 마일스톤으로 배치할 수 없어 조용히 제외된다.
 
+### 3.6b 3개년 서사 로드맵 & 정합
+
+**POST /roadmaps** → 201 — 새 버전을 만든다. 이전 활성 버전은 지워지지 않고
+`superseded`가 된다. 요청은 전부 선택(`focus`, `career_track`)이며 비우면 프로필에서
+가져온다.
+
+응답은 1-1부터 3-2까지 **6개 마디**다. 각 마디는 서사 단계(탐색 → 기초 → 연결 →
+분화 → 독립 탐구 → 종합), 목표, 후보 과목, 역량 목표, 그리고 그 학기의 제안 주제
+10개(`plan_events`, core 4 + optional 6)를 갖는다. 현재 학기보다 앞선 마디는
+`narrative_stage: "회고"`, `status: "skipped"`이고 제안 주제가 비어 있다 — 이미
+지나간 학기에 계획을 제안해도 학생이 할 수 있는 일이 없기 때문이다.
+
+**GET /roadmaps/active** · **GET /roadmaps/{id}** · **POST /roadmaps/{id}/confirm**
+(draft → active) · **PATCH /roadmaps/nodes/{id}** (학생이 제목·목표를 직접 수정)
+
+**정합(Reconciliation)** — 활동을 저장하면(`POST /activities`) 그 자리에서 활성
+노드와 대조해 판정을 남긴다. 로드맵이 없으면 조용히 넘어간다.
+
+| 판정 | 의미 | 노드에 일어나는 일 |
+|---|---|---|
+| `MATCH` | 활동이 노드 목표와 직접 연결됨 | 노드 완료 + 다음 노드 활성화 |
+| `PARTIAL_MATCH` | 일부만 충족 | 부분 충족으로 기록 + 다음 노드 활성화 |
+| `DIVERGE` | 노드와 근거가 적음 | 바뀌지 않음 (이탈로 단정하지 않는다) |
+| `MISS` | 학기가 지나도록 충족 활동이 없음 | 바뀌지 않음 (이월/건너뛰기는 학생이 결정) |
+| `UNCLASSIFIABLE` | 활성 노드가 없음 | — |
+
+판정에는 이유·조치·신뢰도가 함께 남고 **덮어쓰지 않는다.**
+
+**GET /roadmaps/reconciliations/history** → 판정 이력
+**POST /roadmaps/checkpoint** → 학기 체크포인트. 이미 지나간(또는 지금 끝나는)
+학기의 활성 노드에 충족 활동이 없으면 `MISS`를 남기고, 남길 것이 없으면 `null`.
+아직 오지 않은 학기에는 찍지 않으며 같은 노드에 두 번 쌓이지 않는다.
+
 ### 3.7 후속 탐구 추천 (기능2)
 
 **POST /recommendations/follow-up** → 201

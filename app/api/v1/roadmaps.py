@@ -13,6 +13,7 @@ from app.models.roadmap import Roadmap
 from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.roadmap import (
+    ReconciliationLogRead,
     RoadmapGenerateRequest,
     RoadmapNodeRead,
     RoadmapNodeUpdate,
@@ -99,3 +100,24 @@ async def update_node(
 ) -> RoadmapNodeRead:
     node = await roadmap_service.update_node(db, user.id, node_id, data.model_dump())
     return RoadmapNodeRead.model_validate(node)
+
+
+@router.get("/reconciliations/history", response_model=list[ReconciliationLogRead])
+async def list_reconciliations(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ReconciliationLogRead]:
+    """판정 이력. 활동 타임라인 옆에 "이 활동이 로드맵의 어디였는지"를 붙여 보여준다."""
+    rows = await roadmap_service.list_reconciliations(db, user.id)
+    return [ReconciliationLogRead.model_validate(row) for row in rows]
+
+
+@router.post("/checkpoint", response_model=ReconciliationLogRead | None)
+async def run_checkpoint(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ReconciliationLogRead | None:
+    """학기 체크포인트. 활성 노드에 완료 활동이 없으면 MISS를 남긴다 — 활동 저장이
+    아니라 시간이 흘러서 생기는 판정이라 별도 경로다. 남길 것이 없으면 null."""
+    log = await roadmap_service.run_semester_checkpoint(db, user)
+    return ReconciliationLogRead.model_validate(log) if log else None

@@ -6,7 +6,7 @@ record_service에 있다.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
@@ -46,7 +46,7 @@ from app.schemas.records import (
     VolunteerRecordRead,
     VolunteerRecordUpdate,
 )
-from app.services import activity_lineage_service, record_service
+from app.services import activity_lineage_service, record_service, roadmap_service
 
 
 class Pagination(BaseModel):
@@ -97,6 +97,7 @@ def build_record_router(
     read_schema: type[BaseModel],
     filter_schema: type[Pagination],
     order_by: Callable[[], list[UnaryExpression]],
+    after_create: Callable[[AsyncSession, User, Any], Awaitable[None]] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[tag])
 
@@ -127,6 +128,8 @@ def build_record_router(
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> Any:
         row = await record_service.create_record(db, model, user.id, data.model_dump())
+        if after_create is not None:
+            await after_create(db, user, row)
         return read_schema.model_validate(row)
 
     @router.get("/{record_id}", response_model=read_schema)
@@ -224,6 +227,12 @@ volunteer_record_router = build_record_router(
     order_by=lambda: [VolunteerRecord.grade.asc(), VolunteerRecord.date.asc().nullslast()],
 )
 
+async def _reconcile_new_activity(db: AsyncSession, user: User, row: Any) -> None:
+    """활동을 저장하면 곧바로 활성 로드맵과 대조한다. 로드맵이 없으면 조용히 넘어간다 —
+    로드맵을 만들기 전에 기록부터 쌓는 것을 막을 이유가 없다."""
+    await roadmap_service.reconcile_activity(db, user.id, row)
+
+
 activity_router = build_record_router(
     prefix="/activities",
     tag="activities",
@@ -237,6 +246,7 @@ activity_router = build_record_router(
         Activity.semester.asc().nullsfirst(),
         Activity.created_at.asc(),
     ],
+    after_create=_reconcile_new_activity,
 )
 
 

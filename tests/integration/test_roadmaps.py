@@ -194,3 +194,157 @@ async def test_topic_order_is_stable_across_requests(
     priorities = [e["priority"] for e in created["nodes"][0]["plan_events"]]
     assert priorities[:4] == ["core"] * 4
     assert set(priorities[4:]) == {"optional"}
+
+
+async def _add_activity(client: AsyncClient, headers: dict[str, str], **kw) -> dict:
+    payload = {
+        "grade": 2,
+        "semester": 1,
+        "activity_category": "과목세부특기사항",
+        "activity_name": "활동",
+        "activity_type": "report",
+        "description": "설명",
+        **kw,
+    }
+    return (await client.post("/api/v1/activities", json=payload, headers=headers)).json()
+
+
+async def test_saving_an_activity_reconciles_it_against_the_active_node(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """활동을 저장하면 그 자리에서 활성 노드와 대조되고, 판정이 이력으로 남는다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    active_before = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    await _add_activity(
+        client,
+        auth_headers,
+        subject="물리학",
+        activity_name="원리와 실제 사례를 비교한 정량 분석 보고서",
+        description="교과 원리가 실제 사례로 이어지는 과정을 비교하고 모형을 해석했다.",
+    )
+
+    history = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    assert len(history) == 1
+    assert history[0]["match_type"] == "MATCH"
+    assert history[0]["node_id"] == active_before["id"]
+    assert history[0]["confidence"] >= 72
+    assert history[0]["action"]
+
+    # 노드가 완료되고 다음 노드가 활성화된다.
+    after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    nodes = {n["id"]: n for n in after["nodes"]}
+    assert nodes[active_before["id"]]["status"] == "done"
+    assert nodes[active_before["id"]]["instantiated_activity_id"] is not None
+    following = [n for n in after["nodes"] if n["order_index"] == active_before["order_index"] + 1]
+    assert following[0]["status"] == "active"
+
+
+async def test_an_unrelated_activity_does_not_advance_the_roadmap(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """로드맵 밖 활동을 저장했다고 노드가 완료되면 안 된다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    active_before = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    await _add_activity(
+        client, auth_headers, subject="음악", activity_name="교내 합창대회 참가", description="합창"
+    )
+
+    history = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    assert history[0]["match_type"] == "DIVERGE"
+
+    after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    still_active = next(n for n in after["nodes"] if n["id"] == active_before["id"])
+    assert still_active["status"] == "active"
+
+
+async def test_activities_saved_without_a_roadmap_are_not_blocked(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """로드맵을 만들기 전에 기록부터 쌓는 것을 막을 이유가 없다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+
+    created = await _add_activity(client, auth_headers, activity_name="로드맵 없이 저장")
+    assert created["activity_name"] == "로드맵 없이 저장"
+
+    history = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    assert history == []
+
+
+async def test_semester_checkpoint_records_a_miss_only_when_nothing_was_done(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """MISS는 활동 저장이 아니라 시간이 흘러서 생긴다. 노드 상태는 바꾸지 않는다 —
+    이월할지 건너뛸지는 학생이 정한다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    active_before = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    miss = (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json()
+    assert miss["match_type"] == "MISS"
+    assert miss["activity_id"] is None
+    assert "학생이 결정" in miss["action"]
+
+    after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    assert next(n for n in after["nodes"] if n["id"] == active_before["id"])["status"] == "active"
+
+    # 노드를 충족하는 활동이 생기면 더 이상 MISS를 남기지 않는다.
+    await _add_activity(
+        client,
+        auth_headers,
+        subject="물리학",
+        activity_name="원리와 실제 사례를 비교한 정량 분석 보고서",
+        description="교과 원리가 실제 사례로 이어지는 과정을 비교하고 모형을 해석했다.",
+    )
+    assert (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json() is None
+
+
+async def test_checkpoint_does_not_flag_a_semester_that_has_not_happened_yet(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """활동이 노드를 충족해 다음 노드가 활성화된 직후에도 체크포인트가 돌 수 있다.
+    시점 비교가 없으면 아직 오지 않은 학기에 곧바로 MISS가 찍힌다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
+
+    # 2-1 노드를 충족시키면 2-2가 활성화된다 — 학생은 아직 2학년 1학기다.
+    await _add_activity(
+        client,
+        auth_headers,
+        subject="물리학",
+        activity_name="원리와 실제 사례를 비교한 정량 분석 보고서",
+        description="교과 원리가 실제 사례로 이어지는 과정을 비교하고 모형을 해석했다.",
+    )
+    active = next(
+        n
+        for n in (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()["nodes"]
+        if n["status"] == "active"
+    )
+    assert (active["grade"], active["semester"]) == (2, 2)
+
+    assert (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json() is None
+
+
+async def test_checkpoint_does_not_pile_up_duplicate_misses(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """체크포인트는 여러 번 호출될 수 있다. 같은 노드에 MISS가 쌓이면 안 된다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
+
+    assert (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json()
+    assert (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json() is None
+
+    history = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    assert [h["match_type"] for h in history] == ["MISS"]

@@ -63,3 +63,20 @@ class RoadmapNodeUpdate(BaseModel):
     status: str | None = None
     candidate_subjects: list[str] | None = None
     competency_goals: list[str] | None = None
+
+
+class ReconciliationLogRead(BaseModel):
+    """활동이 로드맵의 어디에 해당하는지에 대한 판정 한 건. 덮어쓰지 않고 쌓이므로
+    화면은 활동 타임라인과 함께 이력으로 보여줄 수 있다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    activity_id: uuid.UUID | None
+    roadmap_id: uuid.UUID
+    node_id: uuid.UUID | None
+    match_type: str
+    rationale: str
+    action: str
+    confidence: int
+    created_at: datetime
