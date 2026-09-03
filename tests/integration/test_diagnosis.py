@@ -116,19 +116,19 @@ async def test_pre_questions_returns_questions_before_first_diagnosis(
 
 async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     # 성적 추이 섹션은 LLM 없이 원자료를 그대로 재구성하므로, 실제로 그렇게
-    # 동작하는지 확인하려면 academic_performance가 있어야 한다.
-    await client.post(
-        "/api/v1/academic-performance",
-        json={
-            "grade": 1,
-            "semester": 1,
-            "category": "수학",
-            "subject": "수학",
-            "achievement_grade": "A",
-            "raw_score": 95,
-        },
-        headers=auth_headers,
-    )
+    # 동작하는지 확인하려면 academic_performance가 있어야 한다. 등급이 매겨진 과목
+    # 둘과 매겨지지 않은 과목 하나를 섞어, 평균이 앞의 둘로만 계산되는지 본다.
+    for payload in (
+        {"subject": "수학", "category": "수학", "achievement_grade": "A", "rank": "2"},
+        {"subject": "영어", "category": "영어", "achievement_grade": "B", "rank": "4"},
+        # 진로선택과목 — 성취도만 있고 석차등급이 없다.
+        {"subject": "공학 일반", "category": "기술·가정", "achievement_grade": "A"},
+    ):
+        await client.post(
+            "/api/v1/academic-performance",
+            json={"grade": 1, "semester": 1, "raw_score": 95, **payload},
+            headers=auth_headers,
+        )
 
     # 같은 과목·다른 학기 활동 두 개 — 지식 그래프 fake가 내용(과목)을 보고
     # 이 둘을 링크로 찾아내는지 확인하기 위함이다.
@@ -186,10 +186,17 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     body = result_response.json()
     assert body["status"] == "done"
 
-    # 성적 추이 — LLM 없이 원자료에서 직접 계산된 값이어야 한다.
-    assert body["grades_trend"]["subjects"][0]["subject"] == "수학"
-    assert body["grades_trend"]["subjects"][0]["points"][0]["raw_score"] == 95
-    assert body["grades_trend"]["overall"][0]["average_raw_score"] == 95
+    # 성적 추이 — LLM 없이 원자료에서 직접 계산된다. 과목별 선은 그리지 않고
+    # 학기별 평균 석차등급 한 줄만 낸다.
+    assert "subjects" not in body["grades_trend"]
+    point = body["grades_trend"]["overall"][0]
+    assert (point["grade"], point["semester"]) == (1, 1)
+    # 석차등급이 있는 두 과목(2, 4)만 평균에 들어간다.
+    assert point["average_rank"] == 3.0
+    assert point["subject_count"] == 2
+    # 등급이 없어 빠진 과목이 몇 개인지 함께 밝힌다 — 안 그러면 평균이 그 학기
+    # 전체를 대표하는 것처럼 읽힌다.
+    assert point["excluded_count"] == 1
 
     # 학기별 평가 — 3개의 독립된 텍스트로 나뉘어 저장된다.
     review = body["semester_reviews"][0]
@@ -238,7 +245,7 @@ async def test_diagnosis_works_without_any_seteuk_data(
     body = result_response.json()
     assert body["status"] == "done"
     assert body["semester_reviews"] == []
-    assert body["grades_trend"] == {"subjects": [], "overall": []}
+    assert body["grades_trend"] == {"overall": []}
     assert body["activity_inventory"] == []
     assert body["knowledge_graph_links"] == []
     assert body["strengths"] == ["강점1"]

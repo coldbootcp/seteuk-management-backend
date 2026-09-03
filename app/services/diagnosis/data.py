@@ -1,3 +1,4 @@
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,9 +15,7 @@ from app.models.reading_activity import ReadingActivity
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.diagnosis import (
     GradesTrend,
-    GradesTrendOverallPoint,
     GradesTrendPoint,
-    GradesTrendSubject,
 )
 
 _EXCLUDED_COLUMNS = {"id", "user_id", "source_upload_id", "created_at"}
@@ -151,9 +150,27 @@ async def get_activities_by_grade(
 
 
 
+def _parse_rank(raw: str | None) -> int | None:
+    """석차등급 문자열을 1~9 정수로. 생기부에는 "3"처럼 숫자만 오는 게 보통이지만
+    "3/280" 같은 표기도 있어 앞의 정수만 취한다. 1~9를 벗어나면 석차등급이 아니라
+    다른 값이 들어온 것으로 보고 버린다."""
+    if not raw:
+        return None
+    match = re.match(r"\s*(\d+)", raw)
+    if match is None:
+        return None
+    value = int(match.group(1))
+    return value if 1 <= value <= 9 else None
+
+
 async def compute_grades_trend(db: AsyncSession, user_id: uuid.UUID) -> GradesTrend:
-    """성적 추이 섹션 — LLM을 거치지 않는다. 원자료를 과목별 시계열과 학기별
-    평균으로 재구성만 한다."""
+    """성적 추이 섹션 — 진단에서 유일하게 LLM을 거치지 않는다.
+
+    **학기별 평균 석차등급 한 줄만** 만든다. 석차등급이 없는 과목(진로선택·전문교과·
+    P과목)은 평균에서 빼는데, 성취도 A/B/C를 등급으로 환산하면 없는 숫자를 지어내는
+    것이기 때문이다. 대신 몇 개가 빠졌는지를 `excluded_count`로 함께 넘겨, 평균이
+    그 학기 전체를 대표하는 것처럼 읽히지 않게 한다.
+    """
     rows = list(
         await db.scalars(
             select(AcademicPerformance)
@@ -162,45 +179,21 @@ async def compute_grades_trend(db: AsyncSession, user_id: uuid.UUID) -> GradesTr
         )
     )
 
-    by_subject: dict[str, list[AcademicPerformance]] = defaultdict(list)
     by_semester: dict[tuple[int, int], list[AcademicPerformance]] = defaultdict(list)
     for row in rows:
-        by_subject[row.subject].append(row)
         by_semester[(row.grade, row.semester)].append(row)
 
-    subjects = [
-        GradesTrendSubject(
-            subject=subject,
-            category=subject_rows[0].category,
-            points=[
-                GradesTrendPoint(
-                    grade=r.grade,
-                    semester=r.semester,
-                    achievement_grade=r.achievement_grade,
-                    raw_score=r.raw_score,
-                    subject_average=r.subject_average,
-                    std_deviation=r.std_deviation,
-                    rank=r.rank,
-                )
-                for r in subject_rows
-            ],
+    overall: list[GradesTrendPoint] = []
+    for (grade, semester), semester_rows in sorted(by_semester.items()):
+        ranks = [r for r in (_parse_rank(row.rank) for row in semester_rows) if r is not None]
+        overall.append(
+            GradesTrendPoint(
+                grade=grade,
+                semester=semester,
+                average_rank=(sum(ranks) / len(ranks)) if ranks else None,
+                subject_count=len(ranks),
+                excluded_count=len(semester_rows) - len(ranks),
+            )
         )
-        for subject, subject_rows in by_subject.items()
-    ]
 
-    overall = [
-        GradesTrendOverallPoint(
-            grade=grade,
-            semester=semester,
-            average_raw_score=(
-                sum(r.raw_score for r in semester_rows if r.raw_score is not None)
-                / len([r for r in semester_rows if r.raw_score is not None])
-                if any(r.raw_score is not None for r in semester_rows)
-                else None
-            ),
-            subject_count=len(semester_rows),
-        )
-        for (grade, semester), semester_rows in sorted(by_semester.items())
-    ]
-
-    return GradesTrend(subjects=subjects, overall=overall)
+    return GradesTrend(overall=overall)

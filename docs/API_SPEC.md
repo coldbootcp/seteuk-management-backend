@@ -198,11 +198,8 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 {
   "diagnosis_id": "uuid", "status": "done",
   "grades_trend": {
-    "subjects": [{ "subject": "수학Ⅰ", "category": "수학",
-                   "points": [{ "grade": 2, "semester": 1, "achievement_grade": "A",
-                                "raw_score": 96, "subject_average": 78.4,
-                                "std_deviation": 12.1, "rank": "2" }] }],
-    "overall": [{ "grade": 2, "semester": 1, "average_raw_score": 88.2, "subject_count": 8 }]
+    "overall": [{ "grade": 2, "semester": 1, "average_rank": 2.27,
+                  "subject_count": 11, "excluded_count": 5 }]
   },
   "semester_reviews": [{ "grade": 2, "semester": 1,
                          "grades_review": "…", "reading_review": "…",
@@ -226,9 +223,17 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 흐르기 쉽기 때문에, 각 섹션은 좁은 범위의 실제 데이터만 입력받아 그것을 읽기
 좋은 형태로 옮기는 역할만 한다("LLM은 번역기, 저자가 아니다").
 
-- **`grades_trend`** — LLM을 거치지 않는 순수 데이터. `academic_performance`
-  원자료를 과목별 시계열(`subjects`)과 학기별 평균(`overall`)으로 재구성만 한
-  것이라, 프론트가 그래프 라이브러리에 그대로 먹여 그리면 된다.
+- **`grades_trend`** — LLM을 거치지 않는 순수 데이터. **학기별 평균 석차등급
+  한 줄**이다(1에 가까울수록 좋으므로 세로축은 뒤집어 그린다). 과목별 개별 선은
+  그리지 않는다 — 성적에서 읽어야 하는 것은 학기별 흐름이지 과목 하나하나의
+  등락이 아니기 때문이다.
+
+  석차등급이 없는 과목(진로선택·전문교과·P과목)은 **평균에서 뺀다.** 성취도
+  A/B/C를 등급으로 환산하면 없는 숫자를 지어내는 것이기 때문이다. 실제 생기부
+  샘플에서 이런 과목이 25%가량을 차지하므로, 몇 개가 빠졌는지를
+  `excluded_count`로 함께 내려 평균이 그 학기 전체를 대표하는 것처럼 읽히지
+  않게 한다. 등급이 매겨진 과목이 하나도 없는 학기는 `average_rank`가 null이고
+  선에서 빠진다.
 - **`semester_reviews`** — 학기당 1회 LLM 호출. **그 학기의** 성적/독서/활동
   원자료만 입력받아 세 개의 독립된 텍스트로 낸다. 자료가 없는 측면은 억지로
   채우지 않고 정직하게 "기록이 없다"고 쓴다.

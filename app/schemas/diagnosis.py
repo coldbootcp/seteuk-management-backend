@@ -32,31 +32,26 @@ class PreQuestionAnswersRequest(BaseModel):
 
 
 class GradesTrendPoint(BaseModel):
+    """한 학기의 평균 석차등급.
+
+    과목별 개별 선은 그리지 않는다 — 성적에서 읽어야 하는 것은 학기별 흐름이지
+    과목 하나하나의 등락이 아니기 때문이다.
+    """
+
     grade: int
     semester: int
-    achievement_grade: str | None = None
-    raw_score: float | None = None
-    subject_average: float | None = None
-    std_deviation: float | None = None
-    rank: str | None = None
-
-
-class GradesTrendSubject(BaseModel):
-    subject: str
-    category: str
-    points: list[GradesTrendPoint]
-
-
-class GradesTrendOverallPoint(BaseModel):
-    grade: int
-    semester: int
-    average_raw_score: float | None = None
-    subject_count: int
+    # 석차등급이 있는 과목만 평균 낸 값(1에 가까울수록 좋다). 그 학기에 등급이 매겨진
+    # 과목이 하나도 없으면 null이고, 그런 학기는 선에서 빠진다.
+    average_rank: float | None = None
+    subject_count: int = 0
+    # 석차등급이 없어 평균에서 빠진 과목 수. 진로선택·전문교과·P과목은 성취도(A/B/C)만
+    # 나오는데 실제 생기부에서 25%가량을 차지한다 — 몇 개가 빠졌는지 밝히지 않으면
+    # 평균이 전체를 대표하는 것처럼 읽힌다.
+    excluded_count: int = 0
 
 
 class GradesTrend(BaseModel):
-    subjects: list[GradesTrendSubject] = []
-    overall: list[GradesTrendOverallPoint] = []
+    overall: list[GradesTrendPoint] = []
 
 
 # --- 학기별 평가 섹션 — 학기당 1회 LLM 호출, 성적/독서/활동 3개 독립 텍스트 ---
