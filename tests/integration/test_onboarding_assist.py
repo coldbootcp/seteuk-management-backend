@@ -117,3 +117,43 @@ async def test_node_summary_uses_only_that_semesters_activities(
 
     assert "이번 학기 활동" in CAPTURED["user_content"]
     assert "지난 학기 활동" not in CAPTURED["user_content"]
+
+
+async def test_clarify_stops_asking_once_enough_answers_are_in(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """질문을 몇 번 더 낼지는 모델에게 맡기지 않는다. "충분하면 그만 물어라"라고
+    부탁해도 계속 새 질문을 만들어 내는 것을 관측했고, 그러면 학생이 온보딩에서
+    빠져나오지 못한다."""
+
+    async def _always_asks(system_prompt: str, user_content: str, response_model: type):
+        raise AssertionError("상한을 넘었으면 LLM을 부르지 않아야 한다")
+
+    monkeypatch.setattr(profile_service, "call_structured", _always_asks)
+
+    response = await client.post(
+        "/api/v1/profile/clarify",
+        json={
+            "career_goal": "연구직",
+            "answers": [
+                {"key": f"q{index}", "question": "…", "answer": "…"} for index in range(6)
+            ],
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"questions": [], "complete": True}
+
+
+async def test_clarify_marks_itself_complete_when_it_has_nothing_left_to_ask(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _no_questions(system_prompt: str, user_content: str, response_model: type):
+        return ClarifyResponse(questions=[])
+
+    monkeypatch.setattr(profile_service, "call_structured", _no_questions)
+
+    response = await client.post(
+        "/api/v1/profile/clarify", json={"career_goal": "연구직"}, headers=auth_headers
+    )
+    assert response.json()["complete"] is True

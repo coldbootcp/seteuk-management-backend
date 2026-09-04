@@ -17,6 +17,9 @@ from app.services.llm import call_structured
 from app.services.onboarding_prompts import CLARIFY_SYSTEM_PROMPT, SUGGEST_SYSTEM_PROMPT
 from app.services.student_interest_service import get_current_interests, upsert_interest
 
+# 이만큼 답을 받았으면 로드맵을 세우기에 충분하다고 보고 더 묻지 않는다.
+MAX_CLARIFY_ANSWERS = 6
+
 
 async def set_profile(db: AsyncSession, user: User, data: ProfileRequest) -> None:
     user.name = data.name
@@ -82,9 +85,21 @@ async def suggest_direction(career_goal: str) -> SuggestResponse:
 
 
 async def clarify_onboarding(data: ClarifyRequest) -> ClarifyResponse:
-    """아직 비었거나 막연한 항목에 대해 확인 질문을 만든다."""
-    return await call_structured(
+    """아직 비었거나 막연한 항목에 대해 확인 질문을 만든다.
+
+    이미 받은 답(`answers`)을 함께 넘겨야 같은 것을 다시 묻지 않는다 — 이걸 빼면
+    학생이 답할 때마다 같은 질문이 되돌아와 온보딩이 끝나지 않는다.
+    """
+    # 질문을 몇 번이나 더 낼지는 모델에게 맡기지 않는다. 프롬프트로 "충분하면
+    # 그만 물어라"라고 부탁해도 계속 새 질문을 만들어 내는 것을 실제로 관측했고,
+    # 그러면 학생이 온보딩에서 빠져나오지 못한다.
+    if len(data.answers) >= MAX_CLARIFY_ANSWERS:
+        return ClarifyResponse(questions=[], complete=True)
+
+    result = await call_structured(
         CLARIFY_SYSTEM_PROMPT,
         json.dumps(data.model_dump(), ensure_ascii=False),
         ClarifyResponse,
     )
+    result.complete = not result.questions
+    return result

@@ -79,8 +79,20 @@ class ClarifyQuestion(BaseModel):
     options: list[str] = []
 
 
+class ClarifyAnswer(BaseModel):
+    """앞선 질문에 학생이 이미 준 답."""
+
+    key: str
+    question: str = ""
+    answer: str
+
+
 class ClarifyRequest(BaseModel):
-    """지금까지 채운 값. 전부 선택이라 폼을 반쯤 채운 상태에서도 물어볼 수 있다."""
+    """지금까지 채운 값. 전부 선택이라 폼을 반쯤 채운 상태에서도 물어볼 수 있다.
+
+    `answers`가 중요하다 — 이걸 빼고 부르면 학생이 방금 답한 것을 모른 채 같은 질문을
+    다시 내서 온보딩이 끝나지 않는다.
+    """
 
     name: str | None = None
     grade: int | None = None
@@ -90,7 +102,11 @@ class ClarifyRequest(BaseModel):
     interest_keywords: list[str] = []
     self_assessed_strengths: str | None = None
     self_assessed_weaknesses: str | None = None
+    answers: list[ClarifyAnswer] = []
 
 
 class ClarifyResponse(BaseModel):
     questions: list[ClarifyQuestion] = []
+    # 더 물을 것이 없으면 questions가 비고 이 값이 true다. 화면은 그때 로드맵
+    # 생성으로 넘어간다.
+    complete: bool = False
