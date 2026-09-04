@@ -207,6 +207,8 @@ class ActivityCreate(BaseModel):
     # 이 활동이 고도화한 이전 활동. 학생이 탭에서 직접 이어 붙이거나,
     # 계획 완료 처리 시 계획의 source_activity_id가 복사돼 들어온다.
     parent_activity_id: uuid.UUID | None = None
+    # 실제로 언제 했는지. 생기부에서 온 행은 비어 있다 — 시점의 정본은 grade/semester다.
+    performed_on: date_type | None = None
 
 
 class ActivityUpdate(BaseModel):
@@ -220,6 +222,8 @@ class ActivityUpdate(BaseModel):
     description: str | None = None
     keywords: list[str] | None = None
     parent_activity_id: uuid.UUID | None = None
+    # 실제로 언제 했는지. 생기부에서 온 행은 비어 있다 — 시점의 정본은 grade/semester다.
+    performed_on: date_type | None = None
 
 
 class ActivityRead(RecordBase):
@@ -234,6 +238,7 @@ class ActivityRead(RecordBase):
     keywords: list[str]
     parent_activity_id: uuid.UUID | None
     parsing_confidence: float | None
+    performed_on: date_type | None
 
 
 class ActivityLineageNode(BaseModel):

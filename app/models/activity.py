@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -65,6 +65,10 @@ class Activity(Base):
     )
     # 이 활동이 어떤 이전 활동을 고도화한 것인지 — 3년 계보 추적의 기록 쪽 절반.
     # plan_items를 거쳐 완료된 활동은 계획의 source_activity_id가 여기로 복사된다.
+    # 실제로 언제 한 활동인지. 학생이 직접 입력할 때만 채워지고, 생기부에서
+    # 파싱된 행은 비어 있다 — 생기부는 학년-학기까지만 알려 주기 때문이다.
+    # 시점의 정본은 여전히 grade/semester다.
+    performed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     # 이 활동이 속한 주제(진로 사슬의 단위). parent_activity_id와 다른 축이다 —
     # 주제는 "어느 갈래인가", parent는 "그 갈래 안에서 무엇을 직접 이어받았는가".
     thread_id: Mapped[uuid.UUID | None] = mapped_column(
