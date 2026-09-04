@@ -41,6 +41,10 @@ class AwardItem(BaseModel):
     rank: str | None = None
     date: datetime.date | None = None
     raw_date: str | None = None
+    # 참가대상 원문("3학년(216명)" 등)과 거기서 읽어낸 학년-학기.
+    participants: str | None = None
+    grade: int | None = None
+    semester: int | None = None
 
 
 class VolunteerRecordItem(BaseModel):

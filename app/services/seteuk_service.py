@@ -97,8 +97,9 @@ def _filter_future_grade_data(
     학년-학기를 갱신하지 않은 채 더 최신 생기부를 다시 올린 경우, 아직
     일어나지 않았어야 할 시점의 기록이 파싱돼 진단·로드맵이 "현재 위치"를
     잘못 판단하게 된다. 온보딩 전(current_grade가 아직 없음)이면 비교 기준이
-    없으므로 거르지 않는다. Award는 grade/semester가 없고 date만 있어 이
-    검사를 적용할 근거가 없다 — 그대로 둔다."""
+    없으므로 거르지 않는다. 수상은 표에 학년 열이 없지만 참가대상과 수상연월일로
+    파싱 시점에 학년-학기를 채우므로(parse_awards), 판정된 행은 함께 거른다 —
+    끝내 판정하지 못한 행만 근거가 없어 남겨 둔다."""
     if current_grade is None:
         return result
 
@@ -121,6 +122,10 @@ def _filter_future_grade_data(
     academic_performance = _filter(result.academic_performance, lambda i: (i.grade, i.semester))
     reading_activities = _filter(result.reading_activities, lambda i: (i.grade, i.semester))
     volunteer_records = _filter(result.volunteer_records, lambda i: (i.grade, None))
+    # 학년을 끝내 읽어내지 못한 수상은 거를 근거가 없으므로 통과시킨다.
+    awards = _filter(
+        result.awards, lambda i: (i.grade, i.semester) if i.grade is not None else (0, None)
+    )
     activities = _filter(result.activities, lambda i: (i.grade, i.semester))
 
     errors = list(result.errors)
@@ -141,7 +146,7 @@ def _filter_future_grade_data(
         attendance=attendance,
         academic_performance=academic_performance,
         reading_activities=reading_activities,
-        awards=result.awards,
+        awards=awards,
         volunteer_records=volunteer_records,
         activities=activities,
         errors=errors,

@@ -145,9 +145,15 @@ class AwardCreate(BaseModel):
     rank: str | None = None
     date: date_type | None = None
     raw_date: str | None = None
+    # 직접 입력할 때는 학생이 시점을 알고 있다. 생기부 파싱은 참가대상과
+    # 수상연월일에서 스스로 채운다.
+    grade: int | None = Field(default=None, ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
 
 
 class AwardUpdate(BaseModel):
+    grade: int | None = Field(default=None, ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
     name: str | None = None
     rank: str | None = None
     date: date_type | None = None
@@ -159,6 +165,11 @@ class AwardRead(RecordBase):
     rank: str | None
     date: date_type | None
     raw_date: str | None
+    # 생기부 수상 표에는 학년 열이 없다. 참가대상과 수상연월일로 파싱 시점에
+    # 채우며, 끝내 판정하지 못한 행은 비어 있다.
+    grade: int | None
+    semester: int | None
+    participants: str | None
 
 
 # --- 봉사 활동 ------------------------------------------------------------
