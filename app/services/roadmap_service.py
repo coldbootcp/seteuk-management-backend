@@ -8,7 +8,7 @@
 import json
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import RoadmapNodeNotFoundError, RoadmapNotFoundError
@@ -29,7 +29,7 @@ from app.schemas.profile import FieldKey
 from app.schemas.roadmap import NodeSummaryDraft
 from app.services.llm import call_structured
 from app.services.onboarding_prompts import NODE_SUMMARY_SYSTEM_PROMPT
-from app.services.roadmap.reconciliation import judge
+from app.services.roadmap.reconciliation import Verdict, judge
 from app.services.roadmap.templates import (
     NARRATIVE_STAGES,
     RETROSPECT_OBJECTIVE,
@@ -101,6 +101,8 @@ async def generate_roadmap(
     user: User,
     focus_override: str | None = None,
     career_track_override: str | None = None,
+    grade_override: int | None = None,
+    semester_override: int | None = None,
 ) -> Roadmap:
     """새 버전을 만들고 이전 활성 버전을 superseded로 내린다.
 
@@ -135,7 +137,11 @@ async def generate_roadmap(
     db.add(roadmap)
     await db.flush()
 
-    current = active_index(user.current_grade or 1, user.current_semester or 1)
+    # 온보딩 미리보기는 프로필 저장 전에 불리므로 학년·학기를 인자로도 받는다.
+    current = active_index(
+        grade_override or user.current_grade or 1,
+        semester_override or user.current_semester or 1,
+    )
 
     for index, stage in enumerate(NARRATIVE_STAGES):
         past = index < current
@@ -267,20 +273,50 @@ async def reconcile_activity(
     if roadmap is None:
         return None
 
+    # 학생이 "이 제안을 실행했다"고 직접 고른 경우, 그 제안이 걸린 마디를 대상으로
+    # 삼는다. 활성 마디를 기본값으로 두되 학생의 선언이 우선이다 — 로드맵보다 한 학기
+    # 늦거나 이른 제안을 이제야 실행하는 일은 흔하고, 그때 활성 마디와 대조하면
+    # 엉뚱한 마디가 완료 처리된다.
     node = await _active_node(db, roadmap.id)
-    verdict = judge(
-        activity_text=" ".join(
-            [
-                activity.activity_name,
-                activity.description or "",
-                activity.subject or "",
-                *(activity.keywords or []),
-            ]
-        ),
-        activity_subject=activity.subject or "",
-        node=node,
-        career_terms=await _career_terms(db, user_id),
-    )
+    declared_event: RoadmapPlanEvent | None = None
+    if activity.source_plan_event_id is not None:
+        declared_event = await db.scalar(
+            select(RoadmapPlanEvent).where(
+                RoadmapPlanEvent.id == activity.source_plan_event_id,
+                RoadmapPlanEvent.user_id == user_id,
+            )
+        )
+        if declared_event is not None:
+            declared_node = await db.scalar(
+                select(RoadmapNode).where(RoadmapNode.id == declared_event.node_id)
+            )
+            if declared_node is not None:
+                node = declared_node
+
+    if declared_event is not None:
+        # 학생이 어느 제안을 실행했는지 밝혔으므로 추측하지 않는다. 글자 겹침으로
+        # 판정하면 같은 탐구를 자기 말로 쓴 학생이 DIVERGE를 받는 일이 생긴다.
+        verdict = Verdict(
+            match_type=MatchType.MATCH.value,
+            rationale=f"학생이 '{declared_event.title}' 제안을 실행한 기록으로 저장했습니다.",
+            action="로드맵 제안과 실제 기록을 연결했습니다.",
+            confidence=100,
+        )
+    else:
+        verdict = judge(
+            activity_text=" ".join(
+                [
+                    activity.activity_name,
+                    activity.description or "",
+                    activity.reflection or "",
+                    activity.subject or "",
+                    *(activity.keywords or []),
+                ]
+            ),
+            activity_subject=activity.subject or "",
+            node=node,
+            career_terms=await _career_terms(db, user_id),
+        )
 
     log = ReconciliationLog(
         user_id=user_id,
@@ -380,12 +416,31 @@ async def list_reconciliations(
 async def list_node_courses(
     db: AsyncSession, user_id: uuid.UUID, node_id: uuid.UUID
 ) -> list[AcademicPerformance]:
-    """학기 마디에 걸린 수강 과목. 소유권은 user_id로 먼저 좁힌다."""
+    """학기 마디의 수강 과목.
+
+    마디에 직접 연결된 과목뿐 아니라 **같은 학년-학기의 생기부 성적**도 함께 돌려준다.
+    생기부에서 들어온 행은 노드를 모르지만, 같은 학기의 같은 학생 과목이라는 사실은
+    같다 — 이걸 빼면 생기부를 반영한 학생이 이미 넣은 과목을 다시 타이핑해야 활동을
+    기록할 수 있다.
+    """
+    node = await db.scalar(
+        select(RoadmapNode).where(RoadmapNode.id == node_id, RoadmapNode.user_id == user_id)
+    )
+    if node is None:
+        raise RoadmapNodeNotFoundError("로드맵 마디를 찾을 수 없습니다")
+
     rows = await db.scalars(
         select(AcademicPerformance)
         .where(
             AcademicPerformance.user_id == user_id,
-            AcademicPerformance.roadmap_node_id == node_id,
+            or_(
+                AcademicPerformance.roadmap_node_id == node_id,
+                and_(
+                    AcademicPerformance.roadmap_node_id.is_(None),
+                    AcademicPerformance.grade == node.grade,
+                    AcademicPerformance.semester == node.semester,
+                ),
+            ),
         )
         .order_by(AcademicPerformance.subject.asc())
     )

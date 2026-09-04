@@ -498,3 +498,126 @@ async def test_previewing_repeatedly_does_not_inflate_the_version(
     assert confirmed.json()["version"] == 1
     again = await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
     assert again.json()["version"] == 2
+
+
+async def test_preview_accepts_grade_before_profile_is_saved(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """온보딩 미리보기는 프로필을 저장하기 전에 로드맵을 만들어 보여준다. 그때
+    학년을 받지 못하면 기본값(1학년 1학기)으로 현재 마디가 잡혀, 2학년 학생이
+    1학년 로드맵을 미리보게 된다."""
+    body = (
+        await client.post(
+            "/api/v1/roadmaps",
+            json={"grade": 2, "semester": 2, "career_track": "해양 생태 연구원"},
+            headers=auth_headers,
+        )
+    ).json()
+
+    statuses = [n["status"] for n in body["nodes"]]
+    assert statuses == ["skipped", "skipped", "skipped", "active", "planned", "planned"]
+
+
+async def test_node_courses_include_seteuk_grades_of_the_same_semester(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """생기부에서 들어온 성적은 마디를 모른다. 그래도 같은 학년-학기 과목이라는
+    사실은 같으므로 그 마디의 수강 과목으로 보여야 한다 — 안 그러면 생기부를
+    반영한 학생이 이미 넣은 과목을 다시 타이핑해야 활동을 기록할 수 있다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    await client.post(f"/api/v1/roadmaps/{roadmap['id']}/confirm", headers=auth_headers)
+    node = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    await client.post(
+        "/api/v1/academic-performance",
+        json={
+            "grade": 2,
+            "semester": 1,
+            "category": "일반선택",
+            "subject": "확률과 통계",
+            "rank": "2",
+        },
+        headers=auth_headers,
+    )
+    # 다른 학기 과목은 섞이지 않아야 한다.
+    await client.post(
+        "/api/v1/academic-performance",
+        json={"grade": 3, "semester": 1, "category": "일반선택", "subject": "미적분", "rank": "3"},
+        headers=auth_headers,
+    )
+
+    courses = (
+        await client.get(f"/api/v1/roadmaps/nodes/{node['id']}/courses", headers=auth_headers)
+    ).json()
+    assert [c["subject"] for c in courses] == ["확률과 통계"]
+
+
+async def test_declared_plan_event_is_trusted_over_text_matching(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """학생이 '이 제안을 실행했다'고 직접 고르면 추측하지 않는다. 글자 겹침으로
+    판정하면 같은 탐구를 자기 말로 쓴 학생이 DIVERGE를 받는다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    await client.post(f"/api/v1/roadmaps/{roadmap['id']}/confirm", headers=auth_headers)
+    node = next(n for n in roadmap["nodes"] if n["status"] == "active")
+    event = node["plan_events"][0]
+
+    created = (
+        await client.post(
+            "/api/v1/activities",
+            json={
+                "grade": 2,
+                "semester": 1,
+                "activity_category": "과목세부특기사항",
+                "subject": "확률과 통계",
+                "activity_name": "빵집 대기줄을 세어 본 기록",
+                # 제안 문구와 한 글자도 겹치지 않는 본문 — 그래도 학생의 선언이 이긴다.
+                "activity_type": "report",
+                "description": "동네 빵집 대기줄 길이를 두 달 동안 세어 표로 옮겼다.",
+                "source_plan_event_id": event["id"],
+            },
+            headers=auth_headers,
+        )
+    ).json()
+
+    logs = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    log = next(entry for entry in logs if entry["activity_id"] == created["id"])
+    assert log["match_type"] == "MATCH"
+    assert log["confidence"] == 100
+    assert event["title"] in log["rationale"]
+
+    # 학생이 선언한 제안이 걸린 마디가 완료 처리돼야 한다.
+    refreshed = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    advanced = next(n for n in refreshed["nodes"] if n["id"] == node["id"])
+    assert advanced["status"] == "done"
+
+
+async def test_reflection_survives_the_round_trip(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """배운 점은 학생이 직접 쓴 글이다. 저장은 받아 놓고 조회에서 빠지면 조용히
+    사라진 것과 같다."""
+    created = (
+        await client.post(
+            "/api/v1/activities",
+            json={
+                "grade": 2,
+                "semester": 1,
+                "activity_category": "과목세부특기사항",
+                "activity_name": "상관계수 탐구",
+                "description": "두 해역의 수온과 개체수를 비교했다.",
+                "reflection": "상관이 낮다고 관계가 없는 건 아니라는 걸 알게 됐다.",
+            },
+            headers=auth_headers,
+        )
+    ).json()
+    assert created["reflection"] == "상관이 낮다고 관계가 없는 건 아니라는 걸 알게 됐다."
+
+    fetched = (
+        await client.get(f"/api/v1/activities/{created['id']}", headers=auth_headers)
+    ).json()
+    assert fetched["reflection"] == created["reflection"]

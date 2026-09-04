@@ -209,6 +209,9 @@ class ActivityCreate(BaseModel):
     parent_activity_id: uuid.UUID | None = None
     # 실제로 언제 했는지. 생기부에서 온 행은 비어 있다 — 시점의 정본은 grade/semester다.
     performed_on: date_type | None = None
+    reflection: str | None = None
+    # 이 활동으로 실행한 로드맵 제안(있으면). 정합 판정이 추측 대신 이 값을 쓴다.
+    source_plan_event_id: uuid.UUID | None = None
 
 
 class ActivityUpdate(BaseModel):
@@ -224,6 +227,9 @@ class ActivityUpdate(BaseModel):
     parent_activity_id: uuid.UUID | None = None
     # 실제로 언제 했는지. 생기부에서 온 행은 비어 있다 — 시점의 정본은 grade/semester다.
     performed_on: date_type | None = None
+    reflection: str | None = None
+    # 이 활동으로 실행한 로드맵 제안(있으면). 정합 판정이 추측 대신 이 값을 쓴다.
+    source_plan_event_id: uuid.UUID | None = None
 
 
 class ActivityRead(RecordBase):
@@ -239,6 +245,9 @@ class ActivityRead(RecordBase):
     parent_activity_id: uuid.UUID | None
     parsing_confidence: float | None
     performed_on: date_type | None
+    reflection: str | None
+    source_plan_event_id: uuid.UUID | None
+    thread_id: uuid.UUID | None
 
 
 class ActivityLineageNode(BaseModel):

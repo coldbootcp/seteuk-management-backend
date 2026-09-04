@@ -57,7 +57,12 @@ async def generate_roadmap(
     """새 로드맵 버전을 만든다. 이전 활성 버전은 지워지지 않고 superseded로 남는다."""
     await enforce_daily_limit(db, user.id, UsageAction.ROADMAP)
     roadmap = await roadmap_service.generate_roadmap(
-        db, user, focus_override=data.focus, career_track_override=data.career_track
+        db,
+        user,
+        focus_override=data.focus,
+        career_track_override=data.career_track,
+        grade_override=data.grade,
+        semester_override=data.semester,
     )
     return await _assemble(db, roadmap)
 

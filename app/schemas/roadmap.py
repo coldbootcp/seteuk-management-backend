@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoadmapPlanEventRead(BaseModel):
@@ -50,10 +50,17 @@ class RoadmapRead(BaseModel):
 
 
 class RoadmapGenerateRequest(BaseModel):
-    """비우면 프로필(진로 희망·관심 키워드·현재 학년-학기)에서 그대로 가져온다."""
+    """비우면 프로필(진로 희망·관심 키워드·현재 학년-학기)에서 그대로 가져온다.
+
+    온보딩 미리보기는 프로필을 저장하기 **전에** 로드맵을 만들어 보여준다. 그래서
+    학년·학기까지 받을 수 있어야 한다 — 안 그러면 저장 전 기본값(1학년 1학기)으로
+    활성 마디가 잡혀, 2학년 학생이 1학년 1학기를 현재로 보는 로드맵을 받는다.
+    """
 
     focus: str | None = None
     career_track: str | None = None
+    grade: int | None = Field(default=None, ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
 
 
 class RoadmapNodeUpdate(BaseModel):
