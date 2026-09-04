@@ -56,12 +56,33 @@ _SETEUK_DOMAIN_MODELS = (
 )
 
 
-async def _replace_previous_upload_data(db: AsyncSession, user_id: uuid.UUID) -> None:
-    """Deletes only rows that trace back to an earlier 생기부 upload for this user.
-    Rows with source_upload_id=NULL were entered some other way (e.g. a future manual
-    edit) and are left untouched — a re-upload replaces the parser's own data, not
-    anything the user added themselves."""
-    for model in _SETEUK_DOMAIN_MODELS:
+# 결과의 각 영역과 그 영역이 들어가는 테이블.
+_SECTION_MODELS: dict[str, type] = {
+    "attendance": Attendance,
+    "academic_performance": AcademicPerformance,
+    "reading_activities": ReadingActivity,
+    "awards": Award,
+    "volunteer_records": VolunteerRecord,
+    "activities": Activity,
+}
+
+
+async def _replace_previous_upload_data(
+    db: AsyncSession, user_id: uuid.UUID, sections: list[str] | None = None
+) -> None:
+    """생기부에서 들어온 행만 지운다. source_upload_id가 비어 있는 행은 학생이 직접
+    넣은 것이라 건드리지 않는다 — 재업로드는 파서가 만든 데이터만 갈아치운다.
+
+    `sections`를 주면 그 영역만 비운다. 검토 화면이 [상장]·[활동]처럼 **카테고리별로
+    나눠 반영**하기 때문이다. 전부 비우면 상장을 반영하는 순간 앞서 반영한 성적이
+    사라진다.
+    """
+    models = (
+        _SETEUK_DOMAIN_MODELS
+        if sections is None
+        else [_SECTION_MODELS[name] for name in sections if name in _SECTION_MODELS]
+    )
+    for model in models:
         await db.execute(
             delete(model).where(model.user_id == user_id, model.source_upload_id.is_not(None))
         )
@@ -242,6 +263,13 @@ async def import_result(
         raise UploadNotReadyError("파싱이 완료되지 않았습니다")
 
     parsed = SeteukAnalysisResult.model_validate(upload.raw_result)
+
+    # 어떤 영역을 이번에 반영하는지. 아무것도 지정하지 않았으면 "전부 반영"이고,
+    # 일부만 지정했으면 그 영역만 손댄다 — 나머지는 앞서 반영한 것을 그대로 둔다.
+    specified = [
+        name for name in _SECTION_MODELS if getattr(selection, name, None) is not None
+    ]
+
     chosen = SeteukAnalysisResult(
         attendance=_pick(parsed.attendance, selection.attendance),
         academic_performance=_pick(parsed.academic_performance, selection.academic_performance),
@@ -252,7 +280,16 @@ async def import_result(
         errors=parsed.errors,
     )
 
-    await _replace_previous_upload_data(db, user_id)
+    await _replace_previous_upload_data(db, user_id, specified or None)
+    if specified:
+        # 지정되지 않은 영역은 이번 반영 대상이 아니므로 비워서 넘긴다.
+        chosen = SeteukAnalysisResult(
+            **{
+                name: (getattr(chosen, name) if name in specified else [])
+                for name in _SECTION_MODELS
+            },
+            errors=chosen.errors,
+        )
     _persist_result(db, user_id, upload_id, chosen)
     upload.imported_at = datetime.now(UTC)
     await db.commit()

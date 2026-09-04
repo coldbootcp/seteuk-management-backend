@@ -9,6 +9,7 @@ import app.services.seteuk_service as seteuk_service
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import ActivityCategory, ActivityType
 from app.models.attendance import Attendance
+from app.models.award import Award
 from app.models.user import User
 from app.schemas.seteuk import (
     AcademicPerformanceItem,
@@ -425,3 +426,74 @@ async def test_import_before_parsing_finishes_is_refused(
     )
     assert response.status_code == 409
     assert response.json()["error_code"] == "UPLOAD_NOT_READY"
+
+
+async def test_importing_one_category_does_not_wipe_another(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """검토 화면은 [상장]·[활동]처럼 카테고리별로 나눠 반영한다. 매번 전부 비우면
+    상장을 반영하는 순간 앞서 반영한 성적이 사라진다 — 학생 눈에는 데이터 손실이다."""
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(
+            academic_performance=[
+                AcademicPerformanceItem(grade=1, semester=1, category="수학", subject="수학"),
+            ],
+            awards=[AwardItem(name="교내 수학경시대회")],
+        )
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+    created = await client.post(
+        "/api/v1/seteuk/uploads",
+        headers=auth_headers,
+        files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
+    )
+    upload_id = created.json()["upload_id"]
+
+    # 성적을 먼저 반영하고,
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import",
+        json={"academic_performance": [0]},
+        headers=auth_headers,
+    )
+    # 이어서 수상만 반영한다.
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import",
+        json={"awards": [0]},
+        headers=auth_headers,
+    )
+
+    async with TestSessionLocal() as db:
+        grades = (await db.execute(select(AcademicPerformance))).scalars().all()
+        awards = (await db.execute(select(Award))).scalars().all()
+    assert len(grades) == 1, "앞서 반영한 성적이 남아 있어야 한다"
+    assert len(awards) == 1
+
+
+async def test_importing_everything_still_replaces_everything(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """영역을 하나도 지정하지 않으면 전체 반영이고, 그때는 이전 반영분을 통째로
+    대체한다 — 재업로드가 파서 데이터를 갈아치우는 기존 규칙 그대로다."""
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(awards=[AwardItem(name="새 수상")])
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+    created = await client.post(
+        "/api/v1/seteuk/uploads",
+        headers=auth_headers,
+        files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
+    )
+    upload_id = created.json()["upload_id"]
+
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import", json={}, headers=auth_headers
+    )
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import", json={}, headers=auth_headers
+    )
+
+    async with TestSessionLocal() as db:
+        awards = (await db.execute(select(Award))).scalars().all()
+    assert len(awards) == 1
