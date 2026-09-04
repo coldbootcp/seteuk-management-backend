@@ -210,3 +210,39 @@ async def test_thread_entries_are_sorted_even_when_the_llm_returns_them_jumbled(
     threads = await pipeline._persist_threads(_FakeDb(), uuid.uuid4(), draft, {})
 
     assert [e.theme for e in threads[0].entries] == ["학년단위", "먼저", "나중"]
+
+
+def _activities(count: int) -> list[Activity]:
+    return [_activity(1, f"활동 {i}") for i in range(count)]
+
+
+async def test_an_empty_graph_is_asked_once_more(monkeypatch: pytest.MonkeyPatch) -> None:
+    """스키마에 맞는 빈 응답은 재시도 정책에 걸리지 않는다. 활동이 충분히 많은데
+    링크가 0건인 것은 대개 그 호출의 편차다 — 실제로 111개 활동에서 0건이 나온
+    진단을 같은 입력으로 다시 부르니 46건이 나왔다."""
+    calls = 0
+
+    async def _fake_batch(activities, interests):
+        nonlocal calls
+        calls += 1
+        return [] if calls == 1 else ["link"]
+
+    monkeypatch.setattr(pipeline, "_write_knowledge_graph_batch", _fake_batch)
+    result = await pipeline._write_knowledge_graph({1: _activities(30)}, {})
+
+    assert calls == 2
+    assert result == ["link"]
+
+
+async def test_a_small_record_is_not_asked_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """활동이 몇 개 없으면 연결이 없는 것이 정상이다 — 괜히 다시 묻지 않는다."""
+    calls = 0
+
+    async def _fake_batch(activities, interests):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(pipeline, "_write_knowledge_graph_batch", _fake_batch)
+    assert await pipeline._write_knowledge_graph({1: _activities(3)}, {}) == []
+    assert calls == 1

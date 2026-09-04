@@ -51,6 +51,8 @@ _KNOWLEDGE_GRAPH_DESCRIPTION_LIMIT = 200
 # 이 개수를 넘으면 한 호출에 다 넣지 않고 인접 학년 쌍으로 나눠 부른다. 165개
 # 규모는 실제 검증에서 문제없이 처리됐으므로, 그보다 확실히 낮게 여유를 두었다.
 _KNOWLEDGE_GRAPH_BATCH_THRESHOLD = 120
+# 이만큼 활동이 있는데 링크가 0건이면 응답 편차로 보고 한 번 더 묻는다.
+_KNOWLEDGE_GRAPH_MIN_FOR_RETRY = 20
 
 
 async def generate_pre_questions(
@@ -331,7 +333,14 @@ async def _write_knowledge_graph(
     잡히고, 겹치는 학년에서 중복으로 찾은 링크는 병합 시 걸러낸다."""
     all_activities = [a for batch in activities_by_grade.values() for a in batch]
     if len(all_activities) <= _KNOWLEDGE_GRAPH_BATCH_THRESHOLD:
-        return await _write_knowledge_graph_batch(all_activities, interests)
+        links = await _write_knowledge_graph_batch(all_activities, interests)
+        # 스키마에 맞는 빈 응답은 재시도 정책에 걸리지 않는다. 활동이 충분히 많은데
+        # 링크가 하나도 없는 것은 대개 그 호출의 편차다 — 실제로 111개 활동에서
+        # 0건이 나온 진단을 같은 입력으로 다시 부르니 46건이 나왔다. 한 번만 더 묻고,
+        # 그래도 비어 있으면 정말 연결이 없다고 보고 그대로 둔다.
+        if not links and len(all_activities) >= _KNOWLEDGE_GRAPH_MIN_FOR_RETRY:
+            links = await _write_knowledge_graph_batch(all_activities, interests)
+        return links
 
     grades = sorted(activities_by_grade)
     windows = (

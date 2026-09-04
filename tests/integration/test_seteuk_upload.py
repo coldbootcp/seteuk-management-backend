@@ -682,3 +682,28 @@ async def test_importing_one_section_leaves_the_others_alone(
 
     still = (await client.get("/api/v1/attendance", headers=auth_headers)).json()
     assert still["total"] == 1, "지정하지 않은 영역이 지워졌습니다"
+
+
+async def test_attendance_is_imported_even_though_the_review_screen_hides_it(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """출결은 검토 화면에 나오지 않는다 — 학생이 고를 대상이 아니라 챗봇이 참고하는
+    자료다. 그래서 선택에 실려 오지 않는데, 지정되지 않은 영역이 반영에서 빠지는
+    규칙 탓에 어느 경로로도 들어가지 못하고 있었다."""
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+
+    # 화면이 하는 것처럼 다른 영역만 지정해서 반영한다.
+    await client.post(
+        f"/api/v1/seteuk/uploads/{created['upload_id']}/import",
+        json={"activities": []},
+        headers=auth_headers,
+    )
+
+    listed = (await client.get("/api/v1/attendance", headers=auth_headers)).json()
+    assert listed["total"] == len(FAKE_RESULT.attendance)

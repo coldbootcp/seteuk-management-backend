@@ -343,6 +343,13 @@ async def import_result(
     specified = [
         name for name in _SECTION_MODELS if getattr(selection, name, None) is not None
     ]
+    # 출결은 검토 화면에 나오지 않는다 — 학생이 고르거나 고칠 대상이 아니고,
+    # 화면 어디에도 노출하지 않기로 한 자료다(챗봇만 참고한다). 그래서 선택에
+    # 실려 오지 않는데, 지정되지 않은 영역은 반영에서 빠지므로 어느 경로로도
+    # 들어가지 못하고 있었다. 학생이 명시적으로 지정하지 않는 한 항상 전부 넣는다.
+    # 아무것도 지정하지 않은 "전체 반영"은 원래 전부 들어가므로 손대지 않는다.
+    if specified and selection.attendance is None:
+        specified.append("attendance")
 
     chosen = SeteukAnalysisResult(
         attendance=_pick(parsed.attendance, selection.attendance),
