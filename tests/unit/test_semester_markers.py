@@ -23,7 +23,11 @@ def test_semester_mentioned_inside_a_sentence_is_not_a_marker() -> None:
 def test_a_standalone_label_is_still_a_marker() -> None:
     """제 줄에 홀로 서 있고 짝이 붙어 있지 않으면 진짜 구분 표시다 — 학기를 나누는
     다른 학교 양식을 막지 않아야 한다."""
-    text = "[2학년]\n1학기\n자율활동: 학급 회장으로 활동함.\n" + "본문 " * 20 + "\n2학기\n진로활동: 캠프 참가.\n"
+    text = (
+        "[2학년]\n1학기\n자율활동: 학급 회장으로 활동함.\n"
+        + "본문 " * 20
+        + "\n2학기\n진로활동: 캠프 참가.\n"
+    )
     assert _found(text) == ["1학기", "2학기"]
 
     blocks = slice_grade_semester_blocks(text)
