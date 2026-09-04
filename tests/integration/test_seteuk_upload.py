@@ -10,6 +10,7 @@ from app.models.academic_performance import AcademicPerformance
 from app.models.activity import ActivityCategory, ActivityType
 from app.models.attendance import Attendance
 from app.models.award import Award
+from app.models.seteuk_upload import SeteukUpload
 from app.models.user import User
 from app.schemas.seteuk import (
     AcademicPerformanceItem,
@@ -497,3 +498,107 @@ async def test_importing_everything_still_replaces_everything(
     async with TestSessionLocal() as db:
         awards = (await db.execute(select(Award))).scalars().all()
     assert len(awards) == 1
+
+
+async def test_latest_upload_lets_the_client_resume_without_remembering_the_id(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """파싱은 몇 분 걸린다. 그 사이 새로고침하면 클라이언트가 업로드 id를 잃는데,
+    되찾을 경로가 없으면 진행 중인 업로드를 통째로 잃는다."""
+    assert (await client.get("/api/v1/seteuk/uploads/latest", headers=auth_headers)).json() is None
+
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+
+    latest = (await client.get("/api/v1/seteuk/uploads/latest", headers=auth_headers)).json()
+    assert latest["upload_id"] == created["upload_id"]
+    assert latest["file_name"] == "record.pdf"
+    # 아직 반영 전이라 imported_at이 비어 있다 — 화면은 이걸 보고 검토 단계를 되살린다.
+    assert latest["imported_at"] is None
+
+    await client.post(
+        f"/api/v1/seteuk/uploads/{created['upload_id']}/import", json={}, headers=auth_headers
+    )
+    after = (await client.get("/api/v1/seteuk/uploads/latest", headers=auth_headers)).json()
+    assert after["imported_at"] is not None
+
+
+async def test_latest_is_not_mistaken_for_an_upload_id(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """"latest"가 {upload_id} 경로에 먼저 걸리면 UUID 파싱 오류가 난다."""
+    response = await client.get("/api/v1/seteuk/uploads/latest", headers=auth_headers)
+    assert response.status_code == 200
+
+
+async def test_only_the_latest_upload_is_kept(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """생기부는 가장 최근 것 하나만 보관한다 — 원본 PDF와 지난 파싱 결과가 계정에
+    쌓이지 않아야 한다."""
+    first = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("first.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+    await client.post(
+        f"/api/v1/seteuk/uploads/{first['upload_id']}/import", json={}, headers=auth_headers
+    )
+
+    second = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("second.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+
+    async with TestSessionLocal() as db:
+        rows = list(await db.scalars(select(SeteukUpload)))
+        assert [str(r.id) for r in rows] == [second["upload_id"]]
+
+        # 지난 업로드에서 온 기록은 새 업로드로 옮겨 붙는다. 여기서 null이 되면 직접
+        # 입력한 행과 구분되지 않아 다음 재업로드가 교체하지 못한다.
+        attendance = list(await db.scalars(select(Attendance)))
+        assert attendance
+        assert all(str(a.source_upload_id) == second["upload_id"] for a in attendance)
+
+
+async def test_replacing_an_upload_still_spares_manually_entered_rows(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """가장 최근 업로드만 남기더라도 재업로드 교체 규칙은 그대로여야 한다 —
+    생기부에서 온 행은 교체되고 직접 입력한 행은 살아남는다."""
+    manual = (
+        await client.post(
+            "/api/v1/attendance",
+            json={"grade": 1, "total_days": 190, "absence": 0, "note": "직접 입력"},
+            headers=auth_headers,
+        )
+    ).json()
+
+    for name in ("first.pdf", "second.pdf"):
+        created = (
+            await client.post(
+                "/api/v1/seteuk/uploads",
+                files={"file": (name, b"%PDF-1.4", "application/pdf")},
+                headers=auth_headers,
+            )
+        ).json()
+        await client.post(
+            f"/api/v1/seteuk/uploads/{created['upload_id']}/import", json={}, headers=auth_headers
+        )
+
+    listed = (await client.get("/api/v1/attendance?limit=100", headers=auth_headers)).json()
+    ids = [row["id"] for row in listed["items"]]
+    assert manual["id"] in ids
+    # 두 번 올렸다고 생기부발 출결이 두 배가 되지 않는다.
+    from_record = [row for row in listed["items"] if row["source_upload_id"]]
+    assert len(from_record) == len(FAKE_RESULT.attendance)

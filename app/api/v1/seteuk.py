@@ -13,6 +13,7 @@ from app.models.user import User
 from app.schemas.seteuk import (
     ImportResultResponse,
     ImportSelectionRequest,
+    LatestUploadResponse,
     SeteukAnalysisResult,
     UploadCreateResponse,
     UploadStatusResponse,
@@ -36,6 +37,31 @@ async def create_upload(
     )
     background_tasks.add_task(seteuk_service.run_parse_job, upload.id, file_bytes)
     return UploadCreateResponse(upload_id=upload.id, status=upload.status)
+
+
+@router.get("/uploads/latest", response_model=LatestUploadResponse | None)
+async def get_latest_upload(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> LatestUploadResponse | None:
+    """가장 최근 업로드. 클라이언트가 업로드 id를 들고 있지 않아도 화면이 진행
+    상황을 되찾을 수 있어야 한다 — 이 경로가 없으면 파싱 중 새로고침 한 번에
+    검토 화면이 사라진다.
+
+    경로가 "/uploads/{upload_id}"보다 먼저 선언돼야 latest가 id로 해석되지 않는다.
+    """
+    upload = await seteuk_service.get_latest_upload(db, user.id)
+    if upload is None:
+        return None
+    return LatestUploadResponse(
+        upload_id=upload.id,
+        status=upload.status,
+        file_name=upload.file_name,
+        parsing_confidence=upload.parsing_confidence,
+        imported_at=upload.imported_at,
+        failure_reason=upload.failure_reason,
+        created_at=upload.created_at,
+    )
 
 
 @router.get("/uploads/{upload_id}", response_model=UploadStatusResponse)

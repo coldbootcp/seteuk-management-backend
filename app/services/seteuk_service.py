@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UnsupportedFileError, UploadNotFoundError, UploadNotReadyError
@@ -41,9 +41,38 @@ async def create_upload(
         content=file_bytes,
     )
     db.add(upload)
+    await db.flush()
+    await _keep_only_this_upload(db, user_id, upload.id)
     await db.commit()
     await db.refresh(upload)
     return upload
+
+
+async def _keep_only_this_upload(
+    db: AsyncSession, user_id: uuid.UUID, upload_id: uuid.UUID
+) -> None:
+    """이 사용자의 생기부는 가장 최근 것 하나만 남긴다(사용자 결정).
+
+    지난 업로드를 그냥 지우면 그 업로드에서 만들어진 기록들의 source_upload_id가
+    null이 되고, 그러면 직접 입력한 행과 구분되지 않아 다음 재업로드가 교체하지
+    못한다. 그래서 먼저 그 기록들을 새 업로드로 옮겨 붙이고 나서 지운다 —
+    "생기부에서 온 행"이라는 사실은 유지되고, 원본 PDF와 지난 파싱 결과만 사라진다.
+    """
+    for model in _SETEUK_DOMAIN_MODELS:
+        await db.execute(
+            update(model)
+            .where(
+                model.user_id == user_id,
+                model.source_upload_id.is_not(None),
+                model.source_upload_id != upload_id,
+            )
+            .values(source_upload_id=upload_id)
+        )
+    await db.execute(
+        delete(SeteukUpload).where(
+            SeteukUpload.user_id == user_id, SeteukUpload.id != upload_id
+        )
+    )
 
 
 _SETEUK_DOMAIN_MODELS = (
@@ -209,6 +238,16 @@ async def get_upload(db: AsyncSession, user_id: uuid.UUID, upload_id: uuid.UUID)
     if upload is None:
         raise UploadNotFoundError("업로드를 찾을 수 없습니다")
     return upload
+
+
+async def get_latest_upload(db: AsyncSession, user_id: uuid.UUID) -> SeteukUpload | None:
+    """이 사용자의 가장 최근 업로드. 없으면 None — 아직 한 번도 올리지 않은 상태다."""
+    return await db.scalar(
+        select(SeteukUpload)
+        .where(SeteukUpload.user_id == user_id)
+        .order_by(SeteukUpload.created_at.desc())
+        .limit(1)
+    )
 
 
 async def get_result(

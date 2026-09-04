@@ -133,6 +133,23 @@ class UploadStatusResponse(BaseModel):
     imported_at: datetime.datetime | None = None
 
 
+class LatestUploadResponse(BaseModel):
+    """가장 최근 업로드 하나. 화면을 다시 그릴 때 "지금 어디까지 와 있는가"를
+    되찾기 위한 것이라, 상태 판단에 필요한 것만 담는다.
+
+    업로드 id를 클라이언트가 기억하지 못해도 되게 하려는 것이 요점이다 — 파싱은
+    몇 분 걸리는데 그 사이 새로고침하면 진행 중인 업로드를 통째로 잃었다.
+    """
+
+    upload_id: UUID
+    status: UploadStatus
+    file_name: str | None = None
+    parsing_confidence: float | None = None
+    imported_at: datetime.datetime | None = None
+    failure_reason: str | None = None
+    created_at: datetime.datetime
+
+
 class ImportSelectionRequest(BaseModel):
     """무엇을 반영할지. 각 항목은 결과 배열의 index 목록이고, 생략하면 그 영역 전체다 —
     학생이 몇 개만 빼는 것이 보통이라 '지정 안 하면 전부'가 자연스럽다."""
