@@ -3,8 +3,8 @@ from dataclasses import dataclass
 
 from app.services.parser.anchors import (
     GRADE_HEADER_PATTERN,
-    SEMESTER_LABEL_PATTERN,
     nearest_preceding,
+    semester_markers,
 )
 
 
@@ -32,7 +32,7 @@ def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlo
     )
     anchors = list(anchor_pattern.finditer(section_text))
     grade_headers = list(GRADE_HEADER_PATTERN.finditer(section_text))
-    semester_labels = list(SEMESTER_LABEL_PATTERN.finditer(section_text))
+    semester_labels = semester_markers(section_text)
 
     blocks: list[TextBlock] = []
     for i, anchor in enumerate(anchors):
@@ -71,7 +71,7 @@ def slice_grade_semester_blocks(section_text: str) -> list[TextBlock]:
         end = grade_headers[i + 1].start() if i + 1 < len(grade_headers) else len(section_text)
         block_text = section_text[start:end]
 
-        semester_labels = list(SEMESTER_LABEL_PATTERN.finditer(block_text))
+        semester_labels = semester_markers(block_text)
         if not semester_labels:
             stripped = block_text.strip()
             if stripped:
