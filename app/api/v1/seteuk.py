@@ -10,7 +10,13 @@ from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.usage_event import UsageAction
 from app.models.user import User
-from app.schemas.seteuk import SeteukAnalysisResult, UploadCreateResponse, UploadStatusResponse
+from app.schemas.seteuk import (
+    ImportResultResponse,
+    ImportSelectionRequest,
+    SeteukAnalysisResult,
+    UploadCreateResponse,
+    UploadStatusResponse,
+)
 from app.services import seteuk_service
 
 router = APIRouter(prefix="/seteuk", tags=["seteuk"])
@@ -39,7 +45,11 @@ async def get_upload_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusResponse:
     upload = await seteuk_service.get_upload(db, user.id, upload_id)
-    return UploadStatusResponse(status=upload.status, parsing_confidence=upload.parsing_confidence)
+    return UploadStatusResponse(
+        status=upload.status,
+        parsing_confidence=upload.parsing_confidence,
+        imported_at=upload.imported_at,
+    )
 
 
 @router.get("/uploads/{upload_id}/result", response_model=SeteukAnalysisResult)
@@ -65,3 +75,21 @@ async def download_upload_file(
         media_type=upload.content_type or "application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{quote(file_name)}"'},
     )
+
+
+@router.post("/uploads/{upload_id}/import", response_model=ImportResultResponse)
+async def import_upload(
+    upload_id: UUID,
+    data: ImportSelectionRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ImportResultResponse:
+    """검토를 마친 파싱 결과 중 학생이 고른 것만 기록에 반영한다.
+
+    파싱과 반영을 나눈 이유는, 파서가 잘못 읽은 항목이나 이제 와서 넣고 싶지 않은
+    활동을 그대로 밀어 넣지 않기 위해서다. 영역을 생략하면 그 영역 전체가 반영된다.
+    """
+    imported = await seteuk_service.import_result(
+        db, user.id, upload_id, seteuk_service.ImportSelection(**data.model_dump())
+    )
+    return ImportResultResponse(imported=imported)

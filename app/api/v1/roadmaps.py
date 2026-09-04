@@ -15,6 +15,7 @@ from app.models.user import User
 from app.schemas.plan import AdoptPlanEventRequest, PlanItemRead
 from app.schemas.records import AcademicPerformanceRead
 from app.schemas.roadmap import (
+    NodeSummaryResponse,
     ReconciliationLogRead,
     RoadmapGenerateRequest,
     RoadmapNodeRead,
@@ -170,3 +171,15 @@ async def adopt_plan_event(
     event = await roadmap_service.get_plan_event(db, user.id, event_id)
     plan = await plan_service.adopt_plan_event(db, user.id, event, data)
     return PlanItemRead.model_validate(plan)
+
+
+@router.post("/nodes/{node_id}/summarize", response_model=NodeSummaryResponse)
+async def summarize_node(
+    node_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> NodeSummaryResponse:
+    """이 학기 마디가 어떻게 채워졌는지 요약한다. 그 학기의 활동만 근거로 쓰고,
+    없으면 없다고 쓴다."""
+    await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
+    return NodeSummaryResponse(summary=await roadmap_service.summarize_node(db, user.id, node_id))

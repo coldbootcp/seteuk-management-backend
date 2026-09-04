@@ -40,6 +40,11 @@ class SeteukUpload(Base):
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     raw_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 파싱과 반영은 별개 단계다. status=done은 "읽어냈다"는 뜻이고, 실제로 기록에
+    # 들어간 시점은 이 값이 말한다 — 학생이 검토 화면에서 고른 뒤에야 채워진다.
+    imported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     failure_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

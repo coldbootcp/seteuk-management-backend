@@ -117,3 +117,23 @@ class UploadCreateResponse(BaseModel):
 class UploadStatusResponse(BaseModel):
     status: UploadStatus
     parsing_confidence: float | None = None
+    # 실제로 기록에 반영된 시점. 파싱만 끝나고 아직 검토 중이면 null이다.
+    imported_at: datetime.datetime | None = None
+
+
+class ImportSelectionRequest(BaseModel):
+    """무엇을 반영할지. 각 항목은 결과 배열의 index 목록이고, 생략하면 그 영역 전체다 —
+    학생이 몇 개만 빼는 것이 보통이라 '지정 안 하면 전부'가 자연스럽다."""
+
+    attendance: list[int] | None = None
+    academic_performance: list[int] | None = None
+    reading_activities: list[int] | None = None
+    awards: list[int] | None = None
+    volunteer_records: list[int] | None = None
+    activities: list[int] | None = None
+
+
+class ImportResultResponse(BaseModel):
+    """영역별로 실제 몇 건이 들어갔는지."""
+
+    imported: dict[str, int]

@@ -55,3 +55,42 @@ class ProfileResponse(BaseModel):
     roadmap_constraints: str | None = None
     self_assessed_strengths: str | None = None
     self_assessed_weaknesses: str | None = None
+
+
+# --- 온보딩 보조 — 학생이 빈 폼 앞에서 막히지 않도록 LLM이 후보를 낸다. 제안은
+# 제안일 뿐이고, 저장되는 것은 학생이 확정한 값이다. ---
+
+
+class SuggestRequest(BaseModel):
+    career_goal: str
+
+
+class SuggestResponse(BaseModel):
+    majors: list[str] = []
+    keywords: list[str] = []
+
+
+class ClarifyQuestion(BaseModel):
+    key: str
+    label: str
+    question: str
+    why: str = ""
+    selection_mode: Literal["single", "multiple"] = "single"
+    options: list[str] = []
+
+
+class ClarifyRequest(BaseModel):
+    """지금까지 채운 값. 전부 선택이라 폼을 반쯤 채운 상태에서도 물어볼 수 있다."""
+
+    name: str | None = None
+    grade: int | None = None
+    semester: int | None = None
+    career_goal: str | None = None
+    target_department: str | None = None
+    interest_keywords: list[str] = []
+    self_assessed_strengths: str | None = None
+    self_assessed_weaknesses: str | None = None
+
+
+class ClarifyResponse(BaseModel):
+    questions: list[ClarifyQuestion] = []

@@ -1,4 +1,6 @@
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,10 +147,13 @@ def _persist_result(
 
 
 async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
-    """Parses the PDF (kept only in memory — never written to disk) and, on success,
-    replaces this user's previous upload-sourced rows with the new result in the same
-    job. There is no separate confirm/apply step: a "done" status means the data is
-    already in place."""
+    """생기부를 읽어 결과를 raw_result에 담는다. **기록에 반영하지는 않는다.**
+
+    파싱과 반영을 나눈 이유는, 학생이 결과를 보고 무엇을 반영할지 고르는 검토 단계가
+    있기 때문이다. 파서가 잘못 읽은 항목이나 이제 와서 넣고 싶지 않은 활동을 그대로
+    밀어 넣지 않는다. `status=done`은 "읽어냈다"는 뜻이고, 실제 반영은
+    `import_result`가 한다.
+    """
     async with AsyncSessionLocal() as db:
         upload = await db.get(SeteukUpload, upload_id)
         if upload is None:
@@ -163,8 +168,6 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
                 user.current_semester if user else None,
             )
             upload.raw_result = result.model_dump(mode="json")
-            await _replace_previous_upload_data(db, upload.user_id)
-            _persist_result(db, upload.user_id, upload.id, result)
             upload.status = UploadStatus.DONE.value
         except Exception as exc:
             upload.status = UploadStatus.FAILED.value
@@ -200,3 +203,65 @@ async def get_upload_file(
     if upload.content is None:
         raise UploadNotFoundError("보관된 원본이 없습니다")
     return upload
+
+
+@dataclass
+class ImportSelection:
+    """무엇을 반영할지. 각 항목은 결과 배열의 index 목록이며, None이면 그 영역 전체다
+    — 학생이 몇 개만 빼는 것이 보통이라 '지정 안 하면 전부'가 자연스럽다."""
+
+    attendance: list[int] | None = None
+    academic_performance: list[int] | None = None
+    reading_activities: list[int] | None = None
+    awards: list[int] | None = None
+    volunteer_records: list[int] | None = None
+    activities: list[int] | None = None
+
+
+def _pick[T](items: list[T], chosen: list[int] | None) -> list[T]:
+    if chosen is None:
+        return list(items)
+    # 범위 밖 index는 조용히 버린다 — 화면이 낡은 결과를 들고 있을 수 있다.
+    return [items[i] for i in chosen if 0 <= i < len(items)]
+
+
+async def import_result(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    upload_id: uuid.UUID,
+    selection: ImportSelection,
+) -> dict[str, int]:
+    """검토를 마친 결과 중 학생이 고른 것만 기록에 반영한다.
+
+    재업로드와 마찬가지로, 이전 업로드에서 들어온 행은 지우고 새로 넣는다 — 직접
+    입력한 행(source_upload_id가 비어 있는 것)은 건드리지 않는다. 같은 업로드를 다시
+    반영하면 그 업로드의 이전 반영분을 대체한다.
+    """
+    upload = await get_upload(db, user_id, upload_id)
+    if upload.status != UploadStatus.DONE.value or upload.raw_result is None:
+        raise UploadNotReadyError("파싱이 완료되지 않았습니다")
+
+    parsed = SeteukAnalysisResult.model_validate(upload.raw_result)
+    chosen = SeteukAnalysisResult(
+        attendance=_pick(parsed.attendance, selection.attendance),
+        academic_performance=_pick(parsed.academic_performance, selection.academic_performance),
+        reading_activities=_pick(parsed.reading_activities, selection.reading_activities),
+        awards=_pick(parsed.awards, selection.awards),
+        volunteer_records=_pick(parsed.volunteer_records, selection.volunteer_records),
+        activities=_pick(parsed.activities, selection.activities),
+        errors=parsed.errors,
+    )
+
+    await _replace_previous_upload_data(db, user_id)
+    _persist_result(db, user_id, upload_id, chosen)
+    upload.imported_at = datetime.now(UTC)
+    await db.commit()
+
+    return {
+        "attendance": len(chosen.attendance),
+        "academic_performance": len(chosen.academic_performance),
+        "reading_activities": len(chosen.reading_activities),
+        "awards": len(chosen.awards),
+        "volunteer_records": len(chosen.volunteer_records),
+        "activities": len(chosen.activities),
+    }

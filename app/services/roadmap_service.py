@@ -5,6 +5,7 @@
 "기존 추천 및 로드맵 실행 기록은 덮어쓰지 않는다"는 원칙 때문이다.
 """
 
+import json
 import uuid
 
 from sqlalchemy import select
@@ -25,6 +26,9 @@ from app.models.roadmap import (
 )
 from app.models.user import User
 from app.schemas.profile import FieldKey
+from app.schemas.roadmap import NodeSummaryDraft
+from app.services.llm import call_structured
+from app.services.onboarding_prompts import NODE_SUMMARY_SYSTEM_PROMPT
 from app.services.roadmap.reconciliation import judge
 from app.services.roadmap.templates import (
     NARRATIVE_STAGES,
@@ -401,3 +405,56 @@ async def list_node_plans(
         .order_by(PlanItem.created_at.asc())
     )
     return list(rows)
+
+
+async def summarize_node(
+    db: AsyncSession, user_id: uuid.UUID, node_id: uuid.UUID
+) -> str:
+    """학기 마디가 어떻게 채워졌는지 요약한다.
+
+    이 마디에 실제로 붙은 활동만 근거로 쓴다 — 활성 마디라고 해서 관련 없는 활동까지
+    끌어오면 "열심히 했다" 류의 근거 없는 요약이 된다. 붙은 활동이 없으면 그렇다고
+    정직하게 쓰게 한다.
+    """
+    node = await db.scalar(
+        select(RoadmapNode).where(RoadmapNode.id == node_id, RoadmapNode.user_id == user_id)
+    )
+    if node is None:
+        raise RoadmapNodeNotFoundError("로드맵 마디를 찾을 수 없습니다")
+
+    linked = list(
+        await db.scalars(
+            select(Activity).where(
+                Activity.user_id == user_id,
+                Activity.grade == node.grade,
+                Activity.semester == node.semester,
+            )
+        )
+    )
+    draft = await call_structured(
+        NODE_SUMMARY_SYSTEM_PROMPT,
+        json.dumps(
+            {
+                "node": {
+                    "grade": node.grade,
+                    "semester": node.semester,
+                    "narrative_stage": node.narrative_stage,
+                    "title": node.title,
+                    "objective": node.objective,
+                    "competency_goals": node.competency_goals,
+                },
+                "activities": [
+                    {
+                        "activity_name": a.activity_name,
+                        "subject": a.subject,
+                        "description": (a.description or "")[:300],
+                        "keywords": a.keywords,
+                    }
+                    for a in linked
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        NodeSummaryDraft,
+    )
+    return draft.summary

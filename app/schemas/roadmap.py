@@ -80,3 +80,13 @@ class ReconciliationLogRead(BaseModel):
     action: str
     confidence: int
     created_at: datetime
+
+
+class NodeSummaryDraft(BaseModel):
+    """LLM이 돌려주는 마디 요약."""
+
+    summary: str
+
+
+class NodeSummaryResponse(BaseModel):
+    summary: str

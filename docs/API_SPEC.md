@@ -134,7 +134,10 @@ Base URL: `/api/v1`
 ### 3.2 생기부 파서
 
 **POST /seteuk/uploads** (multipart/form-data, `file`) → 201 `{ upload_id, status }`
-파싱이 끝나면 결과가 6개 도메인 테이블에 자동 반영된다. 별도 확인/적용 단계는 없다.
+파싱과 반영은 **다른 단계다.** 파싱이 끝나면 결과가 `raw_result`에 담기고
+`status`가 `done`이 되지만, 기록에는 아직 들어가지 않는다 — 파서가 잘못 읽은 항목이나
+이제 와서 넣고 싶지 않은 활동을 그대로 밀어 넣지 않기 위해서다. 학생이 검토 화면에서
+고른 뒤 `POST /uploads/{id}/import`가 반영한다.
 **업로드한 PDF 원본은 계정에 보관된다**(통합 결정 P-1 — 예전 방침을 뒤집었다).
 학생이 나중에 자기가 올린 파일을 다시 확인할 수 있어야 하기 때문이다. 원본은
 진단·챗봇 컨텍스트에 절대 싣지 않으며, `GET /seteuk/uploads/{id}/file`로 내려받는다.
@@ -149,8 +152,9 @@ Base URL: `/api/v1`
 grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러진 게 있으면
 `errors`에 `block_id: "future_grade_filter"`로 몇 건이 왜 빠졌는지 남는다.
 
-**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence }`
-`status`: `processing | done | failed`
+**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence, imported_at }`
+`status`: `processing | done | failed`. `done`은 "읽어냈다"는 뜻이고, 실제로
+기록에 들어간 시점은 `imported_at`이 말한다(검토 전이면 null).
 
 **GET /seteuk/uploads/{upload_id}/result** → 200
 ```json
@@ -159,6 +163,18 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   "awards": [...], "volunteer_records": [...], "activities": [...], "errors": []
 }
 ```
+
+**POST /seteuk/uploads/{upload_id}/import** → 200 `{ imported: { … } }`
+```json
+{ "academic_performance": [0, 2, 5], "attendance": [] }
+```
+검토를 마친 결과 중 고른 것만 반영한다. 각 항목은 결과 배열의 index 목록이고,
+**영역을 생략하면 그 영역 전체**가 반영된다 — 학생이 몇 개만 빼는 것이 보통이기
+때문이다. 빈 배열은 그 영역을 아예 넣지 않는다는 뜻이다. 응답은 영역별로 실제 몇 건이
+들어갔는지 돌려준다.
+
+같은 업로드를 다시 반영하면 그 업로드의 이전 반영분을 대체한다(검토 화면에서 선택을
+바꿔 다시 넣을 수 있다). 직접 입력한 행은 건드리지 않는다.
 
 ### 3.3 프로필
 
@@ -179,6 +195,19 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 ```
 
 **GET /profile/me** → 200 — `users` + `student_interests` 최신값 병합.
+
+**온보딩 보조** — 학생이 빈 폼 앞에서 막히지 않도록 LLM이 후보를 낸다. **아무것도
+저장하지 않는다** — 학생이 고른 값만 `POST /profile`로 확정된다.
+
+**POST /profile/suggest** → `{ majors: [5], keywords: [5] }`
+```json
+{ "career_goal": "바다 생태를 데이터로 연구하고 싶어요" }
+```
+
+**POST /profile/clarify** → `{ questions: [...] }`
+지금까지 채운 값을 보고 아직 비었거나 막연한 부분만 묻는다(최대 4개). 각 질문은
+`{ key, label, question, why, selection_mode, options }`이며, `why`는 학생이 답할
+이유를 알려 주기 위한 것이다. 보기는 학생의 진로에 맞춰 생성된다.
 
 ### 3.4 진단 (기능1)
 
@@ -432,6 +461,11 @@ activities 등        일어난 일
 골라 담을 수 있어야 하기 때문이다. 같은 제안을 두 번 담으면 409.
 
 **GET /roadmaps/nodes/{node_id}/plans** → 그 마디에 매달린 계획 목록
+
+**POST /roadmaps/nodes/{node_id}/summarize** → `{ summary }`
+그 학기가 어떻게 채워졌는지 2~3문장으로 요약한다. **그 학기의 활동만** 근거로
+쓰고, 없으면 없다고 쓴다 — 활성 마디라고 해서 관련 없는 활동까지 끌어오면
+근거 없는 요약이 된다.
 
 계획을 완료하면(`POST /plans/{id}/complete`) 승격된 활동이 **정합 판정까지 거친다** —
 계획대로 해냈는데 로드맵이 그대로면 루프가 끊긴 것이기 때문이다.
