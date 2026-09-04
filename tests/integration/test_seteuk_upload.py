@@ -602,3 +602,51 @@ async def test_replacing_an_upload_still_spares_manually_entered_rows(
     # 두 번 올렸다고 생기부발 출결이 두 배가 되지 않는다.
     from_record = [row for row in listed["items"] if row["source_upload_id"]]
     assert len(from_record) == len(FAKE_RESULT.attendance)
+
+
+async def test_the_student_can_fix_the_period_while_reviewing(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """세특은 과목당 한 덩어리로 쓰여 있어 어느 활동이 몇 학기인지 문서가 말해 주지
+    않는다. 파서는 지어내지 않고 비워 두므로, 그 자리를 채울 수 있는 것은 검토
+    화면에서의 학생 선택뿐이다."""
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+
+    await client.post(
+        f"/api/v1/seteuk/uploads/{created['upload_id']}/import",
+        json={
+            "attendance": [0],
+            "period_overrides": [{"section": "attendance", "index": 0, "grade": 3}],
+        },
+        headers=auth_headers,
+    )
+
+    listed = (await client.get("/api/v1/attendance?limit=10", headers=auth_headers)).json()
+    assert [row["grade"] for row in listed["items"]] == [3]
+
+
+async def test_an_override_out_of_range_is_ignored(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """화면이 낡은 파싱 결과를 들고 있을 수 있다. 없는 index를 가리켜도 반영 전체가
+    실패하면 안 된다."""
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+
+    response = await client.post(
+        f"/api/v1/seteuk/uploads/{created['upload_id']}/import",
+        json={"period_overrides": [{"section": "activities", "index": 99, "semester": 2}]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200

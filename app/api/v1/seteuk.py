@@ -115,7 +115,12 @@ async def import_upload(
     파싱과 반영을 나눈 이유는, 파서가 잘못 읽은 항목이나 이제 와서 넣고 싶지 않은
     활동을 그대로 밀어 넣지 않기 위해서다. 영역을 생략하면 그 영역 전체가 반영된다.
     """
+    payload = data.model_dump()
+    # 요청은 목록으로 오고 서비스는 (영역, index)로 찾는다 — 여기서 옮긴다.
+    payload["period_overrides"] = {
+        (o.section, o.index): (o.grade, o.semester) for o in data.period_overrides
+    }
     imported = await seteuk_service.import_result(
-        db, user.id, upload_id, seteuk_service.ImportSelection(**data.model_dump())
+        db, user.id, upload_id, seteuk_service.ImportSelection(**payload)
     )
     return ImportResultResponse(imported=imported)

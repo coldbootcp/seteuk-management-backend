@@ -1,7 +1,7 @@
 import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.activity import ActivityCategory, ActivityType
 from app.models.seteuk_upload import UploadStatus
@@ -150,6 +150,20 @@ class LatestUploadResponse(BaseModel):
     created_at: datetime.datetime
 
 
+class ImportPeriodOverride(BaseModel):
+    """학생이 검토 화면에서 직접 고친 시점.
+
+    생기부의 세특은 과목당 한 덩어리로 쓰여 있어서 어느 활동이 몇 학기인지 문서가
+    말해 주지 않는다. 파서는 근거 없이 학기를 지어내지 않고 비워 두므로, 그 자리를
+    아는 사람은 학생뿐이다 — 검토 단계에서 고른 값을 그대로 받는다.
+    """
+
+    section: str
+    index: int
+    grade: int | None = Field(default=None, ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
+
+
 class ImportSelectionRequest(BaseModel):
     """무엇을 반영할지. 각 항목은 결과 배열의 index 목록이고, 생략하면 그 영역 전체다 —
     학생이 몇 개만 빼는 것이 보통이라 '지정 안 하면 전부'가 자연스럽다."""
@@ -160,6 +174,8 @@ class ImportSelectionRequest(BaseModel):
     awards: list[int] | None = None
     volunteer_records: list[int] | None = None
     activities: list[int] | None = None
+    # 파싱 결과의 시점을 학생이 고친 것. 지정된 항목만 덮어쓴다.
+    period_overrides: list[ImportPeriodOverride] = []
 
 
 class ImportResultResponse(BaseModel):

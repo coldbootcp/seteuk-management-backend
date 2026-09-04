@@ -1,5 +1,5 @@
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, update
@@ -281,6 +281,34 @@ class ImportSelection:
     awards: list[int] | None = None
     volunteer_records: list[int] | None = None
     activities: list[int] | None = None
+    # (영역, index) -> 학생이 고친 (학년, 학기).
+    period_overrides: dict[tuple[str, int], tuple[int | None, int | None]] = field(
+        default_factory=dict
+    )
+
+
+def _apply_period_overrides(
+    parsed: SeteukAnalysisResult, selection: "ImportSelection"
+) -> SeteukAnalysisResult:
+    """학생이 검토 화면에서 고친 학년-학기를 파싱 결과에 반영한다.
+
+    세특은 과목당 한 덩어리로 쓰여 있어 어느 활동이 몇 학기인지 문서가 말해 주지
+    않는다. 파서는 지어내지 않고 비워 두므로, 그 자리를 채울 수 있는 것은 학생의
+    선택뿐이다. None으로 온 값은 "모르겠다"는 뜻이라 덮어쓰지 않는다.
+    """
+    if not selection.period_overrides:
+        return parsed
+
+    for (section, index), (grade, semester) in selection.period_overrides.items():
+        items = getattr(parsed, section, None)
+        if items is None or not (0 <= index < len(items)):
+            continue  # 화면이 낡은 결과를 들고 있을 수 있다 — 조용히 버린다.
+        item = items[index]
+        if grade is not None and hasattr(item, "grade"):
+            item.grade = grade
+        if semester is not None and hasattr(item, "semester"):
+            item.semester = semester
+    return parsed
 
 
 def _pick[T](items: list[T], chosen: list[int] | None) -> list[T]:
@@ -306,7 +334,9 @@ async def import_result(
     if upload.status != UploadStatus.DONE.value or upload.raw_result is None:
         raise UploadNotReadyError("파싱이 완료되지 않았습니다")
 
-    parsed = SeteukAnalysisResult.model_validate(upload.raw_result)
+    parsed = _apply_period_overrides(
+        SeteukAnalysisResult.model_validate(upload.raw_result), selection
+    )
 
     # 어떤 영역을 이번에 반영하는지. 아무것도 지정하지 않았으면 "전부 반영"이고,
     # 일부만 지정했으면 그 영역만 손댄다 — 나머지는 앞서 반영한 것을 그대로 둔다.
