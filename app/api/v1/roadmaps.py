@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.roadmap import Roadmap
 from app.models.usage_event import UsageAction
 from app.models.user import User
+from app.schemas.plan import AdoptPlanEventRequest, PlanItemRead
 from app.schemas.records import AcademicPerformanceRead
 from app.schemas.roadmap import (
     ReconciliationLogRead,
@@ -21,7 +22,7 @@ from app.schemas.roadmap import (
     RoadmapPlanEventRead,
     RoadmapRead,
 )
-from app.services import roadmap_service
+from app.services import plan_service, roadmap_service
 
 router = APIRouter(prefix="/roadmaps", tags=["roadmaps"])
 
@@ -139,3 +140,33 @@ async def list_node_courses(
     """
     rows = await roadmap_service.list_node_courses(db, user.id, node_id)
     return [AcademicPerformanceRead.model_validate(row) for row in rows]
+
+
+@router.get("/nodes/{node_id}/plans", response_model=list[PlanItemRead])
+async def list_node_plans(
+    node_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[PlanItemRead]:
+    """이 마디에 매달린 계획들. 제안 주제(`plan_events`)가 고를 후보라면, 이건 실제로
+    하기로 한 것이다."""
+    rows = await roadmap_service.list_node_plans(db, user.id, node_id)
+    return [PlanItemRead.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/plan-events/{event_id}/adopt",
+    response_model=PlanItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def adopt_plan_event(
+    event_id: uuid.UUID,
+    data: AdoptPlanEventRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PlanItemRead:
+    """마디의 제안 주제를 계획으로 담는다. 제안은 지우지 않고 그대로 남는다 —
+    학생이 나중에 다른 것을 골라 담을 수 있어야 하기 때문이다."""
+    event = await roadmap_service.get_plan_event(db, user.id, event_id)
+    plan = await plan_service.adopt_plan_event(db, user.id, event, data)
+    return PlanItemRead.model_validate(plan)

@@ -21,6 +21,8 @@ class PlanItemCreate(BaseModel):
     # 이 계획이 어떤 과거 활동의 후속인지 / 어떤 추천에서 골라 담은 것인지.
     source_activity_id: uuid.UUID | None = None
     source_recommendation_id: uuid.UUID | None = None
+    # 이 계획이 어느 학기 마디를 위한 것인지. 로드맵 밖 계획은 비운다.
+    roadmap_node_id: uuid.UUID | None = None
 
 
 class PlanItemUpdate(BaseModel):
@@ -34,6 +36,8 @@ class PlanItemUpdate(BaseModel):
     keywords: list[str] | None = None
     status: PlanItemStatus | None = None
     source_activity_id: uuid.UUID | None = None
+    # 이 계획이 어느 학기 마디를 위한 것인지. 로드맵 밖 계획은 비운다.
+    roadmap_node_id: uuid.UUID | None = None
 
 
 class PlanItemRead(BaseModel):
@@ -56,6 +60,8 @@ class PlanItemRead(BaseModel):
     keywords: list[str]
     created_at: datetime
     updated_at: datetime
+    roadmap_node_id: uuid.UUID | None
+    source_plan_event_id: uuid.UUID | None
 
 
 class PlanItemCompleteRequest(BaseModel):
@@ -147,3 +153,18 @@ class RoadmapOverview(BaseModel):
     past: list[RoadmapOverviewPast]
     current: RoadmapOverviewCurrent
     future: list[RoadmapOverviewFutureMilestone]
+
+
+class AdoptPlanEventRequest(BaseModel):
+    """마디의 제안 주제를 실제 계획으로 담는다.
+
+    제안 주제(roadmap_plan_events)는 골라 담는 후보 목록이고, 담긴 뒤에야 실행 단위인
+    계획이 된다. 그래서 제안은 그대로 남고 계획이 새로 생긴다 — 무엇을 제안했는지와
+    무엇을 하기로 했는지는 서로 다른 사실이다.
+    """
+
+    item_type: PlanItemType = PlanItemType.ACTIVITY
+    # 비우면 제안 주제의 제목을 그대로 쓴다.
+    title: str | None = None
+    due_date: date | None = None
+    source_activity_id: uuid.UUID | None = None

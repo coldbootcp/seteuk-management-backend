@@ -417,6 +417,25 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 **GET /roadmaps/active** · **GET /roadmaps/{id}** · **POST /roadmaps/{id}/confirm**
 (draft → active) · **PATCH /roadmaps/nodes/{id}** (학생이 제목·목표를 직접 수정)
 
+**계획과의 관계** — 마디는 계획을 대신하지 않는다. 마디는 6개 고정이고 학생이 세우는
+계획은 개수가 자유로우며, 완료 승격은 계획의 성질이다. 그래서 네 층이 각자 남는다.
+
+```
+roadmap_nodes        학기 서사 마디 (6개 고정)
+roadmap_plan_events  마디가 제안하는 주제 후보 (마디당 10개, 골라 담는 목록)
+plan_items           실제로 하기로 한 것 (자유)  ← roadmap_node_id로 마디에 매달림
+activities 등        일어난 일
+```
+
+**POST /roadmaps/plan-events/{event_id}/adopt** → 201 (생성된 계획)
+제안 주제를 계획으로 담는다. **제안은 지워지지 않는다** — 학생이 나중에 다른 것을
+골라 담을 수 있어야 하기 때문이다. 같은 제안을 두 번 담으면 409.
+
+**GET /roadmaps/nodes/{node_id}/plans** → 그 마디에 매달린 계획 목록
+
+계획을 완료하면(`POST /plans/{id}/complete`) 승격된 활동이 **정합 판정까지 거친다** —
+계획대로 해냈는데 로드맵이 그대로면 루프가 끊긴 것이기 때문이다.
+
 **수강 과목** — 학기 마디에 어떤 과목을 듣는지는 **별도 테이블이 아니라**
 `academic_performance`의 `roadmap_node_id`로 표현한다(D-3). 성적 레코드를 둘로 나누면
 진단의 학기별 평균 석차등급이 어느 쪽을 봐야 할지 모호해지기 때문이다 — 과목은

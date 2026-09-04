@@ -393,3 +393,86 @@ async def test_courses_attach_to_a_semester_node_without_a_second_grade_table(
         f"/api/v1/roadmaps/nodes/{node['id']}/courses", headers=auth_headers
     )
     assert listed.json()[0]["rank"] == "2"
+
+
+async def test_the_three_layers_stay_separate_and_connect(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """마디 → 제안 주제 → 계획 → 기록. 네 층은 각자 다른 것을 뜻하고, 담기와 완료가
+    그 사이를 잇는다. 마디로 계획을 대신할 수 없는 이유는 마디가 6개 고정인 데 반해
+    계획은 개수가 자유롭고, 완료 승격이 계획의 성질이기 때문이다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    node = next(n for n in roadmap["nodes"] if n["status"] == "active")
+    suggestion = node["plan_events"][0]
+
+    # 제안 주제를 담으면 계획이 생기고, 마디와 제안 양쪽에 매달린다.
+    adopted = await client.post(
+        f"/api/v1/roadmaps/plan-events/{suggestion['id']}/adopt",
+        json={"item_type": "activity"},
+        headers=auth_headers,
+    )
+    assert adopted.status_code == 201
+    plan = adopted.json()
+    assert plan["title"] == suggestion["title"]
+    assert plan["roadmap_node_id"] == node["id"]
+    assert plan["source_plan_event_id"] == suggestion["id"]
+    assert (plan["target_grade"], plan["target_semester"]) == (node["grade"], node["semester"])
+
+    # 제안은 지워지지 않는다 — 나중에 다른 것을 골라 담을 수 있어야 한다.
+    still_there = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    same_node = next(n for n in still_there["nodes"] if n["id"] == node["id"])
+    assert len(same_node["plan_events"]) == len(node["plan_events"])
+
+    # 마디에 매달린 계획으로 조회된다.
+    listed = await client.get(
+        f"/api/v1/roadmaps/nodes/{node['id']}/plans", headers=auth_headers
+    )
+    assert [p["id"] for p in listed.json()] == [plan["id"]]
+
+    # 같은 제안을 두 번 담을 수는 없다.
+    duplicate = await client.post(
+        f"/api/v1/roadmaps/plan-events/{suggestion['id']}/adopt",
+        json={"item_type": "activity"},
+        headers=auth_headers,
+    )
+    assert duplicate.status_code == 409
+
+
+async def test_completing_a_plan_also_advances_the_roadmap(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """계획대로 해냈는데 로드맵이 그대로면 루프가 끊긴 것이다. 탭에서 만든 활동은
+    라우터 훅이 정합을 돌리지만 완료 승격은 그 경로를 지나지 않아, 따로 이어야 한다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    roadmap = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    node = next(n for n in roadmap["nodes"] if n["status"] == "active")
+
+    created = await client.post(
+        "/api/v1/plans",
+        json={
+            "item_type": "activity",
+            "title": "원리와 실제 사례를 비교한 정량 분석 보고서",
+            "description": "교과 원리가 실제 사례로 이어지는 과정을 비교하고 모형을 해석했다.",
+            "subject": "물리학",
+            "target_grade": 2,
+            "target_semester": 1,
+            "roadmap_node_id": node["id"],
+        },
+        headers=auth_headers,
+    )
+    plan_id = created.json()["id"]
+
+    completed = await client.post(
+        f"/api/v1/plans/{plan_id}/complete", json={}, headers=auth_headers
+    )
+    assert completed.status_code == 200
+    assert completed.json()["created_activity_id"] is not None
+
+    history = (
+        await client.get("/api/v1/roadmaps/reconciliations/history", headers=auth_headers)
+    ).json()
+    assert history[0]["match_type"] == "MATCH"
+
+    after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    assert next(n for n in after["nodes"] if n["id"] == node["id"])["status"] == "done"

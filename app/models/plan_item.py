@@ -38,10 +38,22 @@ class PlanItemStatus(StrEnum):
 
 
 class PlanItem(Base):
-    """미래 계획 한 건. 기록(activities 등)과 계획을 한 테이블에 섞지 않고 분리해,
-    아직 종류가 확정되지 않은 계획이나 학기 단위 로드맵도 표현할 수 있게 한다.
-    완료 처리하면 item_type에 맞는 기록 행이 생성되고 completed_activity_id 등으로
-    연결되며, source_activity_id를 통해 '어떤 과거 활동의 후속인지'가 남는다."""
+    """미래 계획 한 건 — **실행 단위**다.
+
+    로드맵과 계획은 서로 다른 층이고, 통합에서도 합치지 않기로 했다.
+
+        roadmap_nodes        학기 서사 마디. 6개 고정. "이 학기에 무엇을 향해 가는가"
+        roadmap_plan_events  그 마디가 제안하는 주제 후보. 학생이 고르는 목록
+        plan_items           실제로 하기로 한 것. 개수 자유. 완료하면 기록이 된다
+        activities           일어난 일
+
+    마디로 계획을 대신할 수 없는 이유는 두 가지다. 마디는 6개로 고정인데 학생이
+    세우는 계획은 개수가 자유롭고, 완료 승격(계획 → 기록)은 애초에 계획의 성질이지
+    마디의 성질이 아니다. 그래서 계획은 남기고 `roadmap_node_id`로 마디에 매단다.
+
+    기록과 계획을 한 테이블에 섞지 않는 원칙은 그대로다. 완료 처리하면 item_type에
+    맞는 기록 행이 생성되고 completed_activity_id 등으로 연결되며,
+    source_activity_id를 통해 '어떤 과거 활동의 후속인지'가 남는다."""
 
     __tablename__ = "plan_items"
     __table_args__ = (
@@ -68,6 +80,16 @@ class PlanItem(Base):
     )
     origin: Mapped[str] = mapped_column(
         String(20), nullable=False, default=PlanItemOrigin.USER.value
+    )
+    # 이 계획이 어느 학기 마디를 위한 것인지. 로드맵 밖에서 세운 계획은 비어 있다 —
+    # 마디에 매달리지 않는 계획도 얼마든지 유효하다.
+    roadmap_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roadmap_nodes.id", ondelete="SET NULL"), nullable=True
+    )
+    # 이 계획이 어떤 제안 주제에서 나왔는지. 학생이 마디의 후보 목록에서 골라 담으면
+    # 채워진다.
+    source_plan_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roadmap_plan_events.id", ondelete="SET NULL"), nullable=True
     )
     # 이 계획이 어떤 과거 활동에서 뻗어 나왔는지 — 3년 계보 추적의 계획 쪽 절반.
     source_activity_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -17,8 +17,10 @@ from app.models.activity import Activity, ActivityCategory, ActivityType
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemOrigin, PlanItemStatus, PlanItemType
 from app.models.reading_activity import ReadingActivity
+from app.models.roadmap import RoadmapNode, RoadmapPlanEvent
 from app.models.user import User
 from app.schemas.plan import (
+    AdoptPlanEventRequest,
     PlanItemCompleteRequest,
     PlanItemCreate,
     RoadmapDraft,
@@ -133,6 +135,20 @@ async def complete_plan_item(
     plan.status = PlanItemStatus.DONE.value
     await db.commit()
     await db.refresh(plan)
+
+    # 계획 완료로 만들어진 활동도 로드맵과 대조한다. 탭에서 직접 만든 활동은 라우터의
+    # after_create 훅이 처리하지만 이 경로는 그곳을 지나지 않아서, 여기서 부르지 않으면
+    # "계획대로 해냈는데 로드맵이 그대로"인 상태가 된다 — 루프의 마지막 고리다.
+    if plan.completed_activity_id is not None:
+        # roadmap_service가 plan_service를 쓰지 않지만, 반대 방향 import가 생기면
+        # 나중에 순환이 되기 쉬워 호출 시점에 가져온다.
+        from app.services import roadmap_service
+
+        activity = await db.get(Activity, plan.completed_activity_id)
+        if activity is not None:
+            await roadmap_service.reconcile_activity(db, user.id, activity)
+            await db.refresh(plan)
+
     return plan
 
 
@@ -343,3 +359,47 @@ async def get_roadmap_overview(db: AsyncSession, user: User) -> RoadmapOverview:
     ]
 
     return RoadmapOverview(past=past, current=current, future=future)
+
+
+async def adopt_plan_event(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    event: "RoadmapPlanEvent",
+    data: "AdoptPlanEventRequest",
+) -> PlanItem:
+    """마디의 제안 주제를 실제 계획으로 담는다.
+
+    제안은 지우지 않고 그대로 둔다 — "무엇을 제안했는가"와 "무엇을 하기로 했는가"는
+    서로 다른 사실이고, 제안 목록이 담을 때마다 줄어들면 학생이 나중에 다른 것을
+    고를 수 없다. 같은 제안을 두 번 담는 것은 막는다.
+    """
+    already = await db.scalar(
+        select(PlanItem).where(
+            PlanItem.user_id == user_id,
+            PlanItem.source_plan_event_id == event.id,
+            PlanItem.status != PlanItemStatus.DROPPED.value,
+        )
+    )
+    if already is not None:
+        raise InvalidPlanTransitionError("이미 담은 제안 주제입니다")
+
+    node = await db.get(RoadmapNode, event.node_id)
+    plan = PlanItem(
+        user_id=user_id,
+        item_type=data.item_type.value,
+        title=data.title or event.title,
+        description=event.description,
+        subject=event.subject or None,
+        target_grade=node.grade if node else None,
+        target_semester=node.semester if node else None,
+        due_date=data.due_date,
+        origin=PlanItemOrigin.AI_ROADMAP.value,
+        roadmap_node_id=event.node_id,
+        source_plan_event_id=event.id,
+        source_activity_id=data.source_activity_id,
+        keywords=[],
+    )
+    db.add(plan)
+    await db.commit()
+    await db.refresh(plan)
+    return plan

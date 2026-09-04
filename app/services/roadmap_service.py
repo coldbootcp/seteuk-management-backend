@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import RoadmapNodeNotFoundError, RoadmapNotFoundError
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
+from app.models.plan_item import PlanItem
 from app.models.roadmap import (
     MatchType,
     ReconciliationLog,
@@ -373,5 +374,30 @@ async def list_node_courses(
             AcademicPerformance.roadmap_node_id == node_id,
         )
         .order_by(AcademicPerformance.subject.asc())
+    )
+    return list(rows)
+
+
+async def get_plan_event(
+    db: AsyncSession, user_id: uuid.UUID, event_id: uuid.UUID
+) -> RoadmapPlanEvent:
+    event = await db.scalar(
+        select(RoadmapPlanEvent).where(
+            RoadmapPlanEvent.id == event_id, RoadmapPlanEvent.user_id == user_id
+        )
+    )
+    if event is None:
+        raise RoadmapNodeNotFoundError("제안 주제를 찾을 수 없습니다")
+    return event
+
+
+async def list_node_plans(
+    db: AsyncSession, user_id: uuid.UUID, node_id: uuid.UUID
+) -> list[PlanItem]:
+    """학기 마디에 매달린 계획들. 제안 주제(후보)와 달리 이건 실제로 하기로 한 것이다."""
+    rows = await db.scalars(
+        select(PlanItem)
+        .where(PlanItem.user_id == user_id, PlanItem.roadmap_node_id == node_id)
+        .order_by(PlanItem.created_at.asc())
     )
     return list(rows)
