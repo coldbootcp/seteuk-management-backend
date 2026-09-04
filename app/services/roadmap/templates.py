@@ -11,6 +11,8 @@ LLM 개인화를 얹는다면 P-3의 하네스 경계와 Reviewer를 거치는 �
 
 from dataclasses import dataclass, field
 
+from app.services.korean_text import with_particle
+
 
 @dataclass(frozen=True)
 class NarrativeStage:
@@ -106,23 +108,6 @@ NARRATIVE_STAGES: list[NarrativeStage] = [
 RETROSPECT_STAGE = "회고"
 RETROSPECT_TITLE = "기존 활동 기록"
 RETROSPECT_OBJECTIVE = "생기부 연동을 통해 과거 활동을 확인하세요."
-
-
-def _has_final_consonant(word: str) -> bool:
-    """마지막 글자에 받침이 있는지. 한글 음절은 (초성×21 + 중성)×28 + 종성으로
-    이루어져 있어서, 28로 나눈 나머지가 0이 아니면 받침이 있다."""
-    if not word:
-        return False
-    last = word[-1]
-    if not ("\uac00" <= last <= "\ud7a3"):
-        # 한글이 아니면(영문·숫자로 끝나는 관심 분야) 받침 없는 쪽으로 읽어 준다.
-        return False
-    return (ord(last) - 0xAC00) % 28 != 0
-
-
-def with_particle(word: str, with_final: str, without_final: str) -> str:
-    """받침에 맞는 조사를 붙인다 — "데이터분석과", "광소자와"."""
-    return f"{word}{with_final if _has_final_consonant(word) else without_final}"
 
 
 def active_index(grade: int, semester: int) -> int:

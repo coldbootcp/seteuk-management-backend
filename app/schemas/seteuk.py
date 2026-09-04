@@ -78,9 +78,17 @@ class LLMActivityDraft(BaseModel):
     activity_name: str
     activity_type: ActivityType
     role: str = ""
-    description: str
+    # 프롬프트는 반드시 채우라고 하지만 실제로 빠뜨린 응답을 관측했다. 필수로 두면
+    # 항목 하나 때문에 블록 전체(활동 수십 건)가 버려지므로, activity_type과 같은
+    # 원칙으로 비워 두고 살린다 — 이름만 있는 활동이 아예 없는 것보다 낫다.
+    description: str = ""
     keywords: list[str] = []
     activity_category: ActivityCategory | None = None
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _tolerate_missing_description(cls, value: object) -> object:
+        return "" if value is None else value
 
     @field_validator("activity_type", mode="before")
     @classmethod

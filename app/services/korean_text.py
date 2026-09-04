@@ -45,3 +45,20 @@ def similarity(left: str, right: str) -> float:
         return 0.0
     matched = sum(1 for token in a if any(_same_word(other, token) for other in b))
     return matched / min(len(a), len(b))
+
+
+def _has_final_consonant(word: str) -> bool:
+    """마지막 글자에 받침이 있는지. 한글 음절은 (초성×21 + 중성)×28 + 종성으로
+    이루어져 있어서, 28로 나눈 나머지가 0이 아니면 받침이 있다."""
+    if not word:
+        return False
+    last = word[-1]
+    if not ("\uac00" <= last <= "\ud7a3"):
+        # 한글이 아니면(영문·숫자로 끝나는 관심 분야) 받침 없는 쪽으로 읽어 준다.
+        return False
+    return (ord(last) - 0xAC00) % 28 != 0
+
+
+def with_particle(word: str, with_final: str, without_final: str) -> str:
+    """받침에 맞는 조사를 붙인다 — "데이터분석과", "광소자와"."""
+    return f"{word}{with_final if _has_final_consonant(word) else without_final}"

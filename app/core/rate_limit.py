@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.exceptions import RateLimitedError
 from app.models.usage_event import UsageAction, UsageEvent
+from app.services.korean_text import with_particle
 
 WINDOW = timedelta(hours=24)
 
@@ -56,7 +57,8 @@ async def enforce_daily_limit(
 
     if used >= limit:
         raise RateLimitedError(
-            f"{_MESSAGES[action]}은(는) 하루 {limit}회까지 가능합니다. 내일 다시 시도해주세요"
+            f"{with_particle(_MESSAGES[action], '은', '는')} 하루 {limit}회까지"
+            " 가능합니다. 내일 다시 시도해주세요"
         )
 
     db.add(UsageEvent(user_id=user_id, action=action.value))

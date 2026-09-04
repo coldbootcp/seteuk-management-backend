@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     seteuk_llm_concurrency: int = 15
+    # 모델 호출 타임아웃(초). SDK 기본값은 connect 5초인데, 파싱은 블록 15개를
+    # 동시에 열기 때문에 그 5초에 걸려 멀쩡한 블록이 통째로 버려지는 일이 있었다.
+    llm_connect_timeout_seconds: float = 20.0
+    llm_read_timeout_seconds: float = 180.0
 
 
 @lru_cache

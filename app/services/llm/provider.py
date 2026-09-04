@@ -12,6 +12,7 @@
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
@@ -56,6 +57,13 @@ class DeepSeekProvider:
                 api_key=settings.deepseek_api_key,
                 base_url=settings.deepseek_base_url,
                 max_retries=0,
+                # SDK 기본 connect 타임아웃(5초)은 블록 15개를 동시에 여는 파싱에서
+                # 실제로 걸렸다 — 응답이 느린 게 아니라 연결을 맺지 못해 블록이
+                # 통째로 버려졌다. 읽기는 넉넉히, 연결은 그보다 짧게 둔다.
+                timeout=httpx.Timeout(
+                    settings.llm_read_timeout_seconds,
+                    connect=settings.llm_connect_timeout_seconds,
+                ),
             )
         return self._cached
 
