@@ -48,12 +48,17 @@ class SemesterGroup:
     academic_performance: list[AcademicPerformance] = field(default_factory=list)
     reading_activities: list[ReadingActivity] = field(default_factory=list)
     activities: list[Activity] = field(default_factory=list)
+    # 자율활동·진로활동처럼 생기부가 학기를 나누지 않고 학년 단위로만 기록하는
+    # 활동. 어느 학기의 것인지 알 수 없으므로 그 학년의 두 학기에 모두 근거로
+    # 넣되, 학기 활동과 섞지 않고 따로 표시한다.
+    year_activities: list[Activity] = field(default_factory=list)
 
     def to_prompt_json(self) -> dict[str, Any]:
         return {
             "academic_performance": [serialize_row(r) for r in self.academic_performance],
             "reading_activities": [serialize_row(r) for r in self.reading_activities],
             "activities": [serialize_row(r) for r in self.activities],
+            "year_activities": [serialize_row(r) for r in self.year_activities],
         }
 
 
@@ -68,14 +73,19 @@ async def get_semester_groups(db: AsyncSession, user_id: uuid.UUID) -> list[Seme
             )
         )
     )
-    activities = list(
-        await db.scalars(
-            select(Activity).where(Activity.user_id == user_id, Activity.semester.is_not(None))
-        )
-    )
+    activities = list(await db.scalars(select(Activity).where(Activity.user_id == user_id)))
+    # 생기부의 자율활동·진로활동·행동특성은 학년 단위라 학기가 비어 있다. 예전에는
+    # 이 행들을 아예 제외했는데, 그러면 학기 리뷰가 기록의 3분의 1을 못 보고
+    # "이 학기 활동 기록이 없습니다"라고 단정한다 — 실제 데이터에서 157건 중
+    # 57건이 여기에 해당했다.
+    semester_activities = [r for r in activities if r.semester is not None]
+    year_activities = [r for r in activities if r.semester is None]
 
-    all_rows = (*academic, *reading, *activities)
+    all_rows = (*academic, *reading, *semester_activities)
     pairs: set[tuple[int, int]] = {(r.grade, r.semester) for r in all_rows}
+    # 학기 활동이 하나도 없어도 학년 활동만 있는 학년이 있을 수 있다. 그 학년도
+    # 리뷰 대상이 되도록 두 학기를 만들어 둔다.
+    pairs |= {(r.grade, sem) for r in year_activities for sem in (1, 2)}
 
     groups: list[SemesterGroup] = []
     for grade, semester in sorted(pairs):
@@ -89,7 +99,10 @@ async def get_semester_groups(db: AsyncSession, user_id: uuid.UUID) -> list[Seme
                 reading_activities=[
                     r for r in reading if r.grade == grade and r.semester == semester
                 ],
-                activities=[r for r in activities if r.grade == grade and r.semester == semester],
+                activities=[
+                    r for r in semester_activities if r.grade == grade and r.semester == semester
+                ],
+                year_activities=[r for r in year_activities if r.grade == grade],
             )
         )
     return groups

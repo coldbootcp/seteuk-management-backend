@@ -362,12 +362,15 @@ async def _write_overall_assessment(
     semester_reviews: list[SemesterReview],
     career_thread: list[CareerThreadEntry],
     activity_inventory: list[ActivityInventoryEntry],
+    student_name: str | None,
 ) -> OverallAssessmentDraft:
     """종합 평가(SWOT) — 원본 데이터가 아니라 앞선 세 섹션의 "결과"만 입력으로
     받는다. 생기부를 아예 안 올린 사용자(전부 비어있음)라도 예외 없이 호출되므로,
     프롬프트가 빈 입력에도 정직하게 답하도록 규칙에 명시돼 있다."""
     user_content = json.dumps(
         {
+            # 이름이 없으면 모델이 "사용자님" 같은 서비스 말투를 만들어 낸다.
+            "student_name": student_name,
             "semester_reviews": [s.model_dump() for s in semester_reviews],
             "career_thread": [t.model_dump() for t in career_thread],
             "activity_inventory": [e.model_dump(mode="json") for e in activity_inventory],
@@ -432,7 +435,9 @@ async def run_diagnosis_pipeline(
     )
 
     # 종합 평가는 위 세 섹션의 결과만 보고 판단한다 — 원본 데이터를 다시 훑지 않는다.
-    overall = await _write_overall_assessment(semester_reviews, career_thread, activity_inventory)
+    overall = await _write_overall_assessment(
+        semester_reviews, career_thread, activity_inventory, user.name if user else None
+    )
 
     return (
         grades_trend,
