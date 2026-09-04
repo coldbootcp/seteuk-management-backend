@@ -112,12 +112,22 @@ async def generate_roadmap(
     career_track = career_track_override or career
 
     previous = await get_active_roadmap(db, user.id)
+    version = 1
     if previous is not None:
-        previous.status = RoadmapStatus.SUPERSEDED.value
+        if previous.status == RoadmapStatus.DRAFT.value:
+            # 초안은 확정 전 스케치다. 미리보기를 다시 누를 때마다 버전이 올라가면
+            # 학생이 로드맵을 보기만 했는데 "v5"가 되어 버린다. 초안은 자리를
+            # 물려주고 사라지고, 버전은 확정된 것부터 센다.
+            version = previous.version
+            await db.delete(previous)
+            await db.flush()
+        else:
+            previous.status = RoadmapStatus.SUPERSEDED.value
+            version = previous.version + 1
 
     roadmap = Roadmap(
         user_id=user.id,
-        version=(previous.version + 1) if previous else 1,
+        version=version,
         career_track=career_track,
         template_id=TEMPLATE_ID,
         status=RoadmapStatus.DRAFT.value,

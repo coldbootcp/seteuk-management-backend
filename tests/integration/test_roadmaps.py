@@ -92,10 +92,12 @@ async def test_each_upcoming_node_offers_core_and_optional_topics(
 async def test_regenerating_supersedes_instead_of_deleting(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    """재생성은 이전 버전을 지우지 않는다 — 실행 기록을 덮어쓰지 않는다는 원칙."""
+    """**확정된** 로드맵은 재생성해도 지워지지 않는다 — 실행 기록을 덮어쓰지 않는다는
+    원칙. (확정 전 초안은 스케치라서 자리를 물려주고 사라진다.)"""
     await _onboard(client, auth_headers, grade=1, semester=1)
 
     first = (await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)).json()
+    await client.post(f"/api/v1/roadmaps/{first['id']}/confirm", headers=auth_headers)
     second = (
         await client.post("/api/v1/roadmaps", json={"focus": "광소자"}, headers=auth_headers)
     ).json()
@@ -476,3 +478,23 @@ async def test_completing_a_plan_also_advances_the_roadmap(
 
     after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
     assert next(n for n in after["nodes"] if n["id"] == node["id"])["status"] == "done"
+
+
+async def test_previewing_repeatedly_does_not_inflate_the_version(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """초안은 확정 전 스케치다. 미리보기를 다시 누를 때마다 버전이 올라가면 학생이
+    로드맵을 보기만 했는데 v5가 되어 버린다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+
+    for _ in range(3):
+        created = await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
+        assert created.json()["version"] == 1
+
+    # 확정하면 그때부터 버전이 는다.
+    confirmed = await client.post(
+        f"/api/v1/roadmaps/{created.json()['id']}/confirm", headers=auth_headers
+    )
+    assert confirmed.json()["version"] == 1
+    again = await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
+    assert again.json()["version"] == 2
