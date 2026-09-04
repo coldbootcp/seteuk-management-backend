@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -90,3 +91,28 @@ class NodeSummaryDraft(BaseModel):
 
 class NodeSummaryResponse(BaseModel):
     summary: str
+
+
+class ActivityReviewDraft(BaseModel):
+    """LLM이 돌려주는 활동 검토."""
+
+    alignment: Literal["aligned", "partial", "separate"] = "separate"
+    summary: str = ""
+    evidence: list[str] = []
+    gaps: list[str] = []
+    next_steps: list[str] = []
+
+
+class ActivityReviewRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    activity_id: uuid.UUID
+    roadmap_node_id: uuid.UUID | None
+    alignment: str
+    summary: str
+    evidence: list[str]
+    gaps: list[str]
+    next_steps: list[str]
+    provider: str
+    created_at: datetime

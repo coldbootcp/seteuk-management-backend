@@ -9,6 +9,7 @@ class Base(DeclarativeBase):
 from app.models import academic_performance as _academic_performance  # noqa: E402, F401
 from app.models import activity as _activity  # noqa: E402, F401
 from app.models import activity_attachment as _activity_attachment  # noqa: E402, F401
+from app.models import activity_review as _activity_review  # noqa: E402, F401
 from app.models import activity_thread as _activity_thread  # noqa: E402, F401
 from app.models import attendance as _attendance  # noqa: E402, F401
 from app.models import award as _award  # noqa: E402, F401

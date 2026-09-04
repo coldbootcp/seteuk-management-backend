@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import UnaryExpression
 
 from app.core.dependencies import get_current_user
+from app.core.rate_limit import enforce_daily_limit
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.academic_performance import AcademicPerformance
@@ -22,6 +23,7 @@ from app.models.activity import Activity
 from app.models.attendance import Attendance
 from app.models.award import Award
 from app.models.reading_activity import ReadingActivity
+from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.records import (
@@ -46,7 +48,13 @@ from app.schemas.records import (
     VolunteerRecordRead,
     VolunteerRecordUpdate,
 )
-from app.services import activity_lineage_service, record_service, roadmap_service
+from app.schemas.roadmap import ActivityReviewRead
+from app.services import (
+    activity_lineage_service,
+    activity_review_service,
+    record_service,
+    roadmap_service,
+)
 
 
 class Pagination(BaseModel):
@@ -270,3 +278,30 @@ record_routers = [
     volunteer_record_router,
     activity_router,
 ]
+
+
+@activity_router.post(
+    "/{activity_id}/review",
+    response_model=ActivityReviewRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def review_activity(
+    activity_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ActivityReviewRead:
+    """이 활동이 생기부에 어떻게 남을지 검토한다 — 근거·빈 곳·다음 한 걸음.
+    로드맵 진척을 옮기는 정합 판정과 달리, 이건 학생에게 방향을 준다."""
+    await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
+    review = await activity_review_service.review_activity(db, user.id, activity_id)
+    return ActivityReviewRead.model_validate(review)
+
+
+@activity_router.get("/reviews/history", response_model=list[ActivityReviewRead])
+async def list_activity_reviews(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ActivityReviewRead]:
+    """활동별 가장 최근 검토."""
+    rows = await activity_review_service.list_reviews(db, user.id)
+    return [ActivityReviewRead.model_validate(row) for row in rows]

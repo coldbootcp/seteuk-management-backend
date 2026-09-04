@@ -524,6 +524,24 @@ activities 등        일어난 일
 선택지를 계획으로 담는다. 계획은 추천의 출처 활동을 물려받아, 나중에 완료하면 그
 활동의 자식으로 기록된다.
 
+### 3.7a 활동 검토
+
+**POST /activities/{activity_id}/review** → 201
+```json
+{ "alignment": "aligned | partial | separate", "summary": "…",
+  "evidence": ["…"], "gaps": ["…"], "next_steps": ["…"] }
+```
+활동 하나가 생기부에 어떻게 남을지 검토한다. **정합 판정과 다른 것을 답한다** —
+정합(`reconciliation_logs`)은 "이 활동이 마디를 충족했는가"를 기계적으로 채점해
+로드맵 진척을 옮기고, 검토는 "무엇이 근거로 남았고 무엇이 비었고 다음에 무엇을 하면
+되는가"를 말해 학생에게 다음 한 걸음을 준다.
+
+같은 학기의 로드맵 마디가 있으면 그 목표를 기준으로 보고, 없으면 활동 자체만
+평가한다. `separate`는 나쁘다는 뜻이 아니다 — 진로가 넓어지는 중일 수도 있다.
+검토는 덮어쓰지 않고 쌓인다.
+
+**GET /activities/reviews/history** → 활동별 **가장 최근** 검토만
+
 ### 3.7b 첨부파일 & 추천 피드백
 
 **POST /activities/{activity_id}/attachments** (multipart, `file`) → 201
