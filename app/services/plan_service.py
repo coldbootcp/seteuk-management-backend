@@ -146,7 +146,7 @@ async def complete_plan_item(
 
         activity = await db.get(Activity, plan.completed_activity_id)
         if activity is not None:
-            await roadmap_service.reconcile_activity(db, user.id, activity)
+            await roadmap_service.reconcile_activity(db, user, activity)
             await db.refresh(plan)
 
     return plan

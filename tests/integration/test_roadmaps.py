@@ -236,13 +236,38 @@ async def test_saving_an_activity_reconciles_it_against_the_active_node(
     assert history[0]["confidence"] >= 72
     assert history[0]["action"]
 
-    # 노드가 완료되고 다음 노드가 활성화된다.
+    # 노드는 완료되지만, 학생은 여전히 그 학기에 있다.
     after = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
     nodes = {n["id"]: n for n in after["nodes"]}
     assert nodes[active_before["id"]]["status"] == "done"
     assert nodes[active_before["id"]]["instantiated_activity_id"] is not None
+    assert nodes[active_before["id"]]["is_current"] is True
+
+    # 다음 학기를 앞당겨 활성화하지 않는다. 이번 학기 목표를 일찍 달성한 학생에게
+    # 화면이 "지금은 다음 학기"라고 말하면 안 된다 — 학기는 목표 달성이 아니라
+    # 시간이 지나야 바뀐다.
     following = [n for n in after["nodes"] if n["order_index"] == active_before["order_index"] + 1]
-    assert following[0]["status"] == "active"
+    assert following[0]["status"] == "planned"
+    assert following[0]["is_current"] is False
+
+
+async def test_the_current_node_follows_the_declared_semester_not_progress(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """"이번 학기"는 진척이 아니라 학생이 선언한 학기다. 두 개념이 status 한 필드에
+    섞여 있으면, 목표를 달성하는 순간 화면이 다음 학기로 건너뛴다."""
+    await _onboard(client, auth_headers, grade=2, semester=1)
+    await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
+
+    roadmap = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    current = [n for n in roadmap["nodes"] if n["is_current"]]
+    assert [(n["grade"], n["semester"]) for n in current] == [(2, 1)]
+
+    # 학생이 다음 학기로 넘어갔다고 선언하면 현재 마디도 따라 옮겨간다 —
+    # 로드맵을 다시 만들지 않아도 된다.
+    await _onboard(client, auth_headers, grade=2, semester=2)
+    moved = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()
+    assert [(n["grade"], n["semester"]) for n in moved["nodes"] if n["is_current"]] == [(2, 2)]
 
 
 async def test_an_unrelated_activity_does_not_advance_the_roadmap(
@@ -313,12 +338,15 @@ async def test_semester_checkpoint_records_a_miss_only_when_nothing_was_done(
 async def test_checkpoint_does_not_flag_a_semester_that_has_not_happened_yet(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    """활동이 노드를 충족해 다음 노드가 활성화된 직후에도 체크포인트가 돌 수 있다.
-    시점 비교가 없으면 아직 오지 않은 학기에 곧바로 MISS가 찍힌다."""
+    """이번 학기 목표를 채운 학생에게 체크포인트가 MISS를 남기면 안 된다.
+
+    예전에는 목표를 채우는 순간 다음 학기 마디가 앞당겨 활성화돼서, 곧바로
+    아직 오지 않은 학기에 MISS가 찍히는 문제가 있었다. 지금은 마디가 앞당겨지지
+    않으므로 현재 마디는 그대로 2-1이고, 그 마디는 이미 채워져 있다.
+    """
     await _onboard(client, auth_headers, grade=2, semester=1)
     await client.post("/api/v1/roadmaps", json={}, headers=auth_headers)
 
-    # 2-1 노드를 충족시키면 2-2가 활성화된다 — 학생은 아직 2학년 1학기다.
     await _add_activity(
         client,
         auth_headers,
@@ -326,12 +354,11 @@ async def test_checkpoint_does_not_flag_a_semester_that_has_not_happened_yet(
         activity_name="원리와 실제 사례를 비교한 정량 분석 보고서",
         description="교과 원리가 실제 사례로 이어지는 과정을 비교하고 모형을 해석했다.",
     )
-    active = next(
-        n
-        for n in (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()["nodes"]
-        if n["status"] == "active"
-    )
-    assert (active["grade"], active["semester"]) == (2, 2)
+
+    nodes = (await client.get("/api/v1/roadmaps/active", headers=auth_headers)).json()["nodes"]
+    current = next(n for n in nodes if n["is_current"])
+    assert (current["grade"], current["semester"]) == (2, 1)
+    assert current["status"] == "done"
 
     assert (await client.post("/api/v1/roadmaps/checkpoint", headers=auth_headers)).json() is None
 

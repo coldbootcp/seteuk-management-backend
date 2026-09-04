@@ -28,9 +28,12 @@ from app.services import plan_service, roadmap_service
 router = APIRouter(prefix="/roadmaps", tags=["roadmaps"])
 
 
-async def _assemble(db: AsyncSession, roadmap: Roadmap) -> RoadmapRead:
+async def _assemble(db: AsyncSession, roadmap: Roadmap, user: User) -> RoadmapRead:
     """마디와 그 안의 제안 주제를 한 응답으로 묶는다. 화면이 학기별로 펼쳐 보여주므로
-    노드마다 이벤트가 붙어 있어야 왕복이 줄어든다."""
+    노드마다 이벤트가 붙어 있어야 왕복이 줄어든다.
+
+    is_current는 저장된 값이 아니라 학생이 선언한 현재 학년-학기로 매번 정한다 —
+    학기는 시간이 지나면 바뀌는데 DB에 박아 두면 갱신할 주체가 없다."""
     nodes = await roadmap_service.list_nodes(db, roadmap.id)
     events = await roadmap_service.list_plan_events(db, roadmap.id)
 
@@ -41,7 +44,11 @@ async def _assemble(db: AsyncSession, roadmap: Roadmap) -> RoadmapRead:
     result = RoadmapRead.model_validate(roadmap)
     result.nodes = [
         RoadmapNodeRead.model_validate(node).model_copy(
-            update={"plan_events": by_node.get(node.id, [])}
+            update={
+                "plan_events": by_node.get(node.id, []),
+                "is_current": node.grade == user.current_grade
+                and node.semester == user.current_semester,
+            }
         )
         for node in nodes
     ]
@@ -64,7 +71,7 @@ async def generate_roadmap(
         grade_override=data.grade,
         semester_override=data.semester,
     )
-    return await _assemble(db, roadmap)
+    return await _assemble(db, roadmap, user)
 
 
 @router.get("/active", response_model=RoadmapRead)
@@ -75,7 +82,7 @@ async def get_active_roadmap(
     roadmap = await roadmap_service.get_active_roadmap(db, user.id)
     if roadmap is None:
         raise RoadmapNotFoundError("아직 만들어진 로드맵이 없습니다")
-    return await _assemble(db, roadmap)
+    return await _assemble(db, roadmap, user)
 
 
 @router.get("/{roadmap_id}", response_model=RoadmapRead)
@@ -85,7 +92,7 @@ async def get_roadmap(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RoadmapRead:
     roadmap = await roadmap_service.get_roadmap(db, user.id, roadmap_id)
-    return await _assemble(db, roadmap)
+    return await _assemble(db, roadmap, user)
 
 
 @router.post("/{roadmap_id}/confirm", response_model=RoadmapRead)
@@ -96,7 +103,7 @@ async def confirm_roadmap(
 ) -> RoadmapRead:
     """학생이 미리보기를 검토한 뒤 확정한다."""
     roadmap = await roadmap_service.confirm_roadmap(db, user.id, roadmap_id)
-    return await _assemble(db, roadmap)
+    return await _assemble(db, roadmap, user)
 
 
 @router.patch("/nodes/{node_id}", response_model=RoadmapNodeRead)

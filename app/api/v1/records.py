@@ -238,7 +238,7 @@ volunteer_record_router = build_record_router(
 async def _reconcile_new_activity(db: AsyncSession, user: User, row: Any) -> None:
     """활동을 저장하면 곧바로 활성 로드맵과 대조한다. 로드맵이 없으면 조용히 넘어간다 —
     로드맵을 만들기 전에 기록부터 쌓는 것을 막을 이유가 없다."""
-    await roadmap_service.reconcile_activity(db, user.id, row)
+    await roadmap_service.reconcile_activity(db, user, row)
 
 
 activity_router = build_record_router(

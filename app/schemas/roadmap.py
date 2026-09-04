@@ -32,7 +32,13 @@ class RoadmapNodeRead(BaseModel):
     objective: str
     candidate_subjects: list[str]
     competency_goals: list[str]
+    # status는 **진척**이다(planned/active/partial/done/skipped). "학생이 지금 어느
+    # 학기에 있는가"와 섞으면 안 된다 — 이번 학기 목표를 일찍 달성하면 마디가 done이
+    # 되는데, 그렇다고 학생이 다음 학기로 넘어간 것은 아니기 때문이다.
     status: str
+    # 학생이 선언한 현재 학년-학기와 일치하는 마디인지. 화면의 "이번 학기"는 이 값을
+    # 봐야 하고, status를 보면 목표를 달성한 순간 다음 학기로 건너뛴 것처럼 보인다.
+    is_current: bool = False
     instantiated_activity_id: uuid.UUID | None
     plan_events: list[RoadmapPlanEventRead] = []
 

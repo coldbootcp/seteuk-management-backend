@@ -233,7 +233,24 @@ async def _career_terms(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
     return terms
 
 
-async def _active_node(db: AsyncSession, roadmap_id: uuid.UUID) -> RoadmapNode | None:
+async def _active_node(
+    db: AsyncSession, roadmap_id: uuid.UUID, user: User | None = None
+) -> RoadmapNode | None:
+    """지금 대조 대상이 되는 마디.
+
+    학생이 선언한 현재 학년-학기의 마디가 1순위다. 그 마디가 목표를 달성해 done이
+    되어도 학생이 다음 학기로 넘어간 것은 아니므로, 상태가 아니라 학기로 찾는다.
+    학년 선언이 없는 사용자(온보딩 전)만 ACTIVE 상태로 되짚는다."""
+    if user is not None and user.current_grade is not None:
+        by_period = await db.scalar(
+            select(RoadmapNode).where(
+                RoadmapNode.roadmap_id == roadmap_id,
+                RoadmapNode.grade == user.current_grade,
+                RoadmapNode.semester == user.current_semester,
+            )
+        )
+        if by_period is not None:
+            return by_period
     return await db.scalar(
         select(RoadmapNode)
         .where(
@@ -245,10 +262,21 @@ async def _active_node(db: AsyncSession, roadmap_id: uuid.UUID) -> RoadmapNode |
     )
 
 
-async def _advance(db: AsyncSession, node: RoadmapNode, finished_status: str) -> None:
-    """현재 노드를 닫고 다음 노드를 활성화한다. 다음 노드가 이미 지나간
-    학기(skipped)면 건너뛰고 그다음을 찾는다."""
+async def _advance(
+    db: AsyncSession, node: RoadmapNode, finished_status: str, user: User | None = None
+) -> None:
+    """마디의 진척을 기록한다.
+
+    다음 마디를 앞당겨 활성화하지 않는다. 예전에는 그렇게 했는데, 이번 학기 목표를
+    10월에 달성한 학생에게 화면이 "지금은 3학년 1학기"라고 말하는 문제가 있었다 —
+    학기는 목표 달성이 아니라 시간이 지나야 바뀐다. 이미 지나간 학기의 마디를
+    닫을 때만(학생이 그 학기를 넘긴 경우) 다음 마디로 넘긴다."""
     node.status = finished_status
+    if user is None or user.current_grade is None:
+        return
+    # 방금 닫은 마디가 아직 학생의 현재 학기라면 여기서 멈춘다.
+    if (node.grade, node.semester) >= (user.current_grade, user.current_semester or 1):
+        return
     following = await db.scalars(
         select(RoadmapNode)
         .where(
@@ -265,10 +293,11 @@ async def _advance(db: AsyncSession, node: RoadmapNode, finished_status: str) ->
 
 
 async def reconcile_activity(
-    db: AsyncSession, user_id: uuid.UUID, activity: Activity
+    db: AsyncSession, user: User, activity: Activity
 ) -> ReconciliationLog | None:
     """활동 하나를 활성 로드맵과 대조한다. 로드맵이 아직 없으면 아무것도 하지 않는다 —
     로드맵을 만들기 전에 기록부터 쌓는 사용자를 막을 이유가 없다."""
+    user_id = user.id
     roadmap = await get_active_roadmap(db, user_id)
     if roadmap is None:
         return None
@@ -277,7 +306,7 @@ async def reconcile_activity(
     # 삼는다. 활성 마디를 기본값으로 두되 학생의 선언이 우선이다 — 로드맵보다 한 학기
     # 늦거나 이른 제안을 이제야 실행하는 일은 흔하고, 그때 활성 마디와 대조하면
     # 엉뚱한 마디가 완료 처리된다.
-    node = await _active_node(db, roadmap.id)
+    node = await _active_node(db, roadmap.id, user)
     declared_event: RoadmapPlanEvent | None = None
     if activity.source_plan_event_id is not None:
         declared_event = await db.scalar(
@@ -333,9 +362,9 @@ async def reconcile_activity(
     if node is not None:
         if verdict.match_type == MatchType.MATCH.value:
             node.instantiated_activity_id = activity.id
-            await _advance(db, node, RoadmapNodeStatus.DONE.value)
+            await _advance(db, node, RoadmapNodeStatus.DONE.value, user)
         elif verdict.match_type == MatchType.PARTIAL_MATCH.value:
-            await _advance(db, node, RoadmapNodeStatus.PARTIAL.value)
+            await _advance(db, node, RoadmapNodeStatus.PARTIAL.value, user)
 
     await db.commit()
     await db.refresh(log)
@@ -352,7 +381,7 @@ async def run_semester_checkpoint(db: AsyncSession, user: User) -> Reconciliatio
     roadmap = await get_active_roadmap(db, user.id)
     if roadmap is None:
         return None
-    node = await _active_node(db, roadmap.id)
+    node = await _active_node(db, roadmap.id, user)
     if node is None:
         return None
 
