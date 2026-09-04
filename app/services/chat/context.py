@@ -94,8 +94,14 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .limit(MAX_VOLUNTEER)
         )
     )
+    # 출결은 탭이 없다 — 챗봇이 참고하는 재료로만 존재하므로(사용자 결정), 여기가
+    # 유일한 노출 경로다. 학년 순으로 읽어야 모델이 흐름을 볼 수 있다.
     attendance = list(
-        await db.scalars(select(Attendance).where(Attendance.user_id == user.id))
+        await db.scalars(
+            select(Attendance)
+            .where(Attendance.user_id == user.id)
+            .order_by(Attendance.grade.asc())
+        )
     )
     plans = list(
         await db.scalars(
