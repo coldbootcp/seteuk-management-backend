@@ -650,3 +650,35 @@ async def test_an_override_out_of_range_is_ignored(
         headers=auth_headers,
     )
     assert response.status_code == 200
+
+
+async def test_importing_one_section_leaves_the_others_alone(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """검토 화면은 카테고리를 하나씩 반영한다. 그때 지정하지 않은 영역은 손대지
+    않아야 한다 — 앞서 반영한 것이 지워지면 마지막 카테고리만 남는다."""
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+    upload_id = created["upload_id"]
+
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import",
+        json={"attendance": [0]},
+        headers=auth_headers,
+    )
+    assert (await client.get("/api/v1/attendance", headers=auth_headers)).json()["total"] == 1
+
+    # 다른 영역만 지정해서 한 번 더 반영한다.
+    await client.post(
+        f"/api/v1/seteuk/uploads/{upload_id}/import",
+        json={"academic_performance": []},
+        headers=auth_headers,
+    )
+
+    still = (await client.get("/api/v1/attendance", headers=auth_headers)).json()
+    assert still["total"] == 1, "지정하지 않은 영역이 지워졌습니다"
