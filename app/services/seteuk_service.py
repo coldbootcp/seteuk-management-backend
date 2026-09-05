@@ -172,6 +172,8 @@ def _filter_future_grade_data(
         )
 
     return SeteukAnalysisResult(
+        # 걸러내기는 기록만 덜어 낸다 — 학적사항이 밝힌 기준점은 그대로 가져간다.
+        freshman_academic_year=result.freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,
         reading_activities=reading_activities,
@@ -337,6 +339,13 @@ async def import_result(
     parsed = _apply_period_overrides(
         SeteukAnalysisResult.model_validate(upload.raw_result), selection
     )
+
+    # 학적사항이 밝힌 입학 학년도를 사용자에 남긴다. 날짜만 있는 기록에 학년을 붙일
+    # 때 쓰는 기준점이라, 이 업로드가 끝난 뒤에도 필요하다.
+    if parsed.freshman_academic_year is not None:
+        user = await db.scalar(select(User).where(User.id == user_id))
+        if user is not None:
+            user.freshman_academic_year = parsed.freshman_academic_year
 
     # 어떤 영역을 이번에 반영하는지. 아무것도 지정하지 않았으면 "전부 반영"이고,
     # 일부만 지정했으면 그 영역만 손댄다 — 나머지는 앞서 반영한 것을 그대로 둔다.

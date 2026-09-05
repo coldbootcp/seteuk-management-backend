@@ -132,39 +132,38 @@ def test_parse_reading_activities_extracts_multiple_books_from_one_cell() -> Non
     assert items[1].author == "다자이 오사무"
 
 
-def test_award_grade_comes_from_participants_and_semester_from_the_date() -> None:
-    """생기부 수상 표에는 학년 열이 없다. 참가대상이 학년을, 수상연월일이 학기를
-    알려 주므로 둘을 합쳐 파싱 시점에 채운다."""
+def test_award_without_a_date_stays_empty() -> None:
+    """수상연월일이 없으면 학년-학기를 정할 근거가 없다. 비워 둔다."""
     table = [
         ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
-        ["과학 탐구 대회", "금상(1위)", "2020.08.13.", "가온고등학교장", "3학년(216명)"],
+        ["표창장", "", "", "가온고", "전교생(929명)"],
     ]
-    [item] = parse_awards([table])
-    assert (item.grade, item.semester) == (3, 1)
-    assert item.participants == "3학년(216명)"
+    [item] = parse_awards([table], freshman_year=2018)
+    assert item.grade is None and item.semester is None
 
 
-def test_ambiguous_participants_are_filled_from_the_same_document() -> None:
-    """"수강자"나 "1·2학년 공동"처럼 학년을 못 읽는 행이 많다. 학년을 읽어낸 행이
-    "이 학사연도가 몇 학년이었는지"를 알려 주므로, 그 대응으로 나머지를 채운다.
-    바깥 시계(오늘 날짜)는 쓰지 않는다 — 생기부는 몇 해 전 문서일 수 있다."""
+def test_award_period_comes_from_the_enrollment_year_not_participants() -> None:
+    """학년-학기는 학적사항의 입학 학년도를 기준으로 수상연월일에서 정한다.
+    참가대상("3학년(216명)")도 학년을 담고 있지만 근거로 쓰지 않는다 — 여러 학년이
+    함께 응모한 대회나 "수강자"·"전교생"처럼 학년을 말해 주지 않는 행이 많다."""
     table = [
         ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
-        ["NIE 역량강화대회", "동상(4위)", "2019.01.07.", "가온고", "1학년 7차일반(227명)"],
+        ["과학 탐구 대회", "금상(1위)", "2020.08.13.", "가온고", "3학년(216명)"],
         ["교과우수상(영어)", "", "2019.01.11.", "가온고", "수강자"],
-        ["모의재판 경연대회", "우수상(2위)", "2019.01.11.", "가온고", "1‧2학년 중 참가자(60명)"],
+        ["모의재판", "우수상(2위)", "2019.06.19.", "가온고", "1·2학년 중 참가자(60명)"],
     ]
-    items = parse_awards([table])
-    # 2018 학년도가 1학년이라는 것을 첫 행에서 배웠고, 1월은 그 학년도의 2학기다.
-    assert [(i.grade, i.semester) for i in items] == [(1, 2), (1, 2), (1, 2)]
+    # 2018학년도에 1학년이었다면 2019-01은 1학년 2학기, 2019-06은 2학년 1학기다.
+    items = parse_awards(table and [table], freshman_year=2018)
+    assert [(i.grade, i.semester) for i in items] == [(3, 1), (1, 2), (2, 1)]
 
 
-def test_award_without_any_grade_signal_stays_empty() -> None:
-    """근거가 없으면 비워 둔다. 날짜 하나로 학년을 지어내면, 미래 학기 필터가
-    지어낸 값을 근거로 기록을 버리게 된다."""
+def test_award_period_is_left_empty_without_an_anchor() -> None:
+    """기준점이 없으면 학년을 지어내지 않는다 — 오늘 날짜로 되짚으면 몇 해 전
+    생기부의 수상이 전부 학년 범위 밖으로 떨어진다."""
     table = [
         ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
-        ["표창장", "", "2019.01.11.", "가온고", "전교생(929명)"],
+        ["과학 탐구 대회", "금상(1위)", "2020.08.13.", "가온고", "3학년(216명)"],
     ]
     [item] = parse_awards([table])
     assert item.grade is None and item.semester is None
+    assert item.participants == "3학년(216명)"

@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     daily_roadmap_limit: int = 10
     daily_recommendation_limit: int = 20
     daily_chat_message_limit: int = 100
+    # 하루 한도를 실제로 적용할지. 비워 두면 환경으로 정한다 — 개발 중에는 같은
+    # 시나리오를 하루에도 수십 번 태워야 해서 한도가 검증을 막는다. 운영에서는
+    # 켜져 있어야 하므로 ENVIRONMENT를 production으로 두면 자동으로 적용된다.
+    rate_limit_enabled: bool | None = None
 
     # processing 상태로 이 시간을 넘긴 job은 프로세스가 죽은 것으로 보고 실패 처리한다.
     stale_job_timeout_minutes: int = 30

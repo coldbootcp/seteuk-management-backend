@@ -1,7 +1,7 @@
 import re
-from datetime import date
 
 from app.schemas.seteuk import AwardItem, ReadingActivityItem, VolunteerRecordItem
+from app.services.academic_year import period_for
 from app.services.parser.dates import normalize_date
 
 Table = list[list[str | None]]
@@ -64,34 +64,18 @@ def _find_header_row(table: Table, required: tuple[str, ...]) -> int | None:
     return None
 
 
-def _academic_year(value: date) -> int:
-    """학사연도. 3월에 시작하므로 1~2월은 앞 학년도에 속한다."""
-    return value.year if value.month >= 3 else value.year - 1
+def parse_awards(tables: list[Table], freshman_year: int | None = None) -> list[AwardItem]:
+    """수상 표를 읽는다. LLM은 쓰지 않는다.
 
+    학년-학기는 수상연월일 하나로 정한다 — `freshman_year`(학적사항의 입학 학년도)를
+    기준점으로 삼아 날짜를 학년으로 옮기고, 학기는 달에서 나온다. 기준점이 없으면
+    학년을 지어내지 않고 비워 둔다.
 
-def _semester_of(value: date) -> int:
-    """1학기는 3~8월, 2학기는 9~2월. 수상은 학기 말에 몰려서 이 경계로 충분하다."""
-    return 1 if 3 <= value.month <= 8 else 2
-
-
-_SINGLE_GRADE_RE = re.compile(r"(?<![·‧・,~])\s*([1-3])\s*학년")
-_MULTI_GRADE_RE = re.compile(r"[1-3]\s*[·‧・,~]\s*[1-3]\s*학년")
-
-
-def _grade_from_participants(participants: str) -> int | None:
-    """참가대상에서 학년을 읽는다.
-
-    "3학년(216명)"처럼 한 학년만 가리킬 때만 받아들인다. "1·2학년 중 참가자"처럼
-    여러 학년이 함께 응모한 대회는 이 학생이 그중 몇 학년이었는지 알 수 없으므로
-    여기서 답하지 않고, 같은 문서의 다른 행에서 배운 학년도↔학년 대응에 맡긴다.
+    참가대상("3학년(216명)")도 학년을 담고 있지만 이 판정에는 쓰지 않는다 — 여러
+    학년이 함께 응모한 대회("1·2학년 중 참가자")나 "수강자"·"전교생"처럼 학년을
+    말해 주지 않는 행이 많아 근거로 고르지 않고, 학적사항이라는 확실한 사실이 있다.
+    원문은 되짚어 볼 수 있게 그대로 보관만 한다.
     """
-    if not participants or _MULTI_GRADE_RE.search(participants):
-        return None
-    matches = _SINGLE_GRADE_RE.findall(participants)
-    return int(matches[0]) if len(set(matches)) == 1 else None
-
-
-def parse_awards(tables: list[Table]) -> list[AwardItem]:
     items: list[AwardItem] = []
     for table in tables:
         if len(table) < 2:
@@ -120,33 +104,19 @@ def parse_awards(tables: list[Table]) -> list[AwardItem]:
                     date=normalize_date(raw_date),
                     raw_date=raw_date,
                     participants=participants,
-                    grade=_grade_from_participants(participants or ""),
                 )
             )
-    return _fill_award_periods(items)
+    return _fill_award_periods(items, freshman_year)
 
 
-def _fill_award_periods(items: list[AwardItem]) -> list[AwardItem]:
-    """수상의 학년-학기를 문서 안에서 완결시킨다.
-
-    학년을 직접 읽어낸 행들이 "이 학사연도가 몇 학년이었는지"를 알려 준다. 그
-    대응표로 참가대상이 모호했던 행(교과우수상의 "수강자", 여러 학년 공동 대회 등)의
-    학년까지 채운다. 바깥 시계(오늘 날짜)는 쓰지 않는다 — 생기부는 몇 해 전 문서일
-    수 있고, 그러면 모든 수상이 학년 범위 밖으로 떨어진다.
-    """
-    year_to_grade: dict[int, int] = {}
-    for item in items:
-        if item.grade is None or item.date is None:
-            continue
-        year_to_grade.setdefault(_academic_year(item.date), item.grade)
-
+def _fill_award_periods(items: list[AwardItem], freshman_year: int | None) -> list[AwardItem]:
+    """수상연월일을 학년-학기로 옮긴다. 기준점이 없으면 비워 둔다."""
     for item in items:
         if item.date is None:
             continue
-        if item.grade is None:
-            item.grade = year_to_grade.get(_academic_year(item.date))
-        if item.grade is not None:
-            item.semester = _semester_of(item.date)
+        period = period_for(item.date, freshman_year)
+        if period is not None:
+            item.grade, item.semester = period
     return items
 
 

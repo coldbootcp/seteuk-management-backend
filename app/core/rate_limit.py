@@ -17,6 +17,11 @@ from app.services.korean_text import with_particle
 
 WINDOW = timedelta(hours=24)
 
+# 한도를 적용하는 환경. 그 밖(local·dev·test 등)에서는 기본적으로 풀어 둔다 —
+# 개발 중에는 같은 시나리오를 하루에도 수십 번 태우게 되고, 그때 한도가 걸리면
+# 검증이 막힌다. RATE_LIMIT_ENABLED로 언제든 명시적으로 덮어쓸 수 있다.
+_ENFORCED_ENVIRONMENTS = {"production", "prod", "staging"}
+
 _MESSAGES = {
     UsageAction.SETEUK_UPLOAD: "생기부 업로드",
     UsageAction.DIAGNOSIS: "진단",
@@ -37,11 +42,28 @@ def _limit_for(action: UsageAction) -> int:
     }[action]
 
 
+def rate_limiting_enabled() -> bool:
+    """한도를 적용할지. 설정이 있으면 그 말을 따르고, 없으면 환경으로 정한다."""
+    settings = get_settings()
+    if settings.rate_limit_enabled is not None:
+        return settings.rate_limit_enabled
+    return settings.environment.lower() in _ENFORCED_ENVIRONMENTS
+
+
 async def enforce_daily_limit(
     db: AsyncSession, user_id: uuid.UUID, action: UsageAction
 ) -> None:
     """한도를 넘지 않았으면 사용 1건을 기록한다. 실제 작업이 실패하면 그 1건은
-    남지만, 남용 방지 목적에서는 과소 계상보다 과대 계상이 안전하다."""
+    남지만, 남용 방지 목적에서는 과소 계상보다 과대 계상이 안전하다.
+
+    한도가 꺼져 있어도 사용 기록은 그대로 남긴다 — 개발 중에도 "이 계정이 오늘
+    몇 번 불렀는지"는 볼 수 있어야 하고, 나중에 한도를 켰을 때 카운터가 비어 있어
+    갑자기 통과하는 일도 없다."""
+    if not rate_limiting_enabled():
+        db.add(UsageEvent(user_id=user_id, action=action.value))
+        await db.commit()
+        return
+
     limit = _limit_for(action)
     since = datetime.now(UTC) - WINDOW
 

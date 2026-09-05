@@ -112,6 +112,9 @@ class ParseError(BaseModel):
 
 
 class SeteukAnalysisResult(BaseModel):
+    # 학적사항이 밝힌 "1학년이었던 학년도". 날짜만 있는 기록(수상 등)을 학년-학기로
+    # 옮기는 기준점이며, 반영할 때 사용자에 저장해 이후에도 쓴다.
+    freshman_academic_year: int | None = None
     attendance: list[AttendanceItem] = []
     academic_performance: list[AcademicPerformanceItem] = []
     reading_activities: list[ReadingActivityItem] = []

@@ -707,3 +707,46 @@ async def test_attendance_is_imported_even_though_the_review_screen_hides_it(
 
     listed = (await client.get("/api/v1/attendance", headers=auth_headers)).json()
     assert listed["total"] == len(FAKE_RESULT.attendance)
+
+
+async def test_the_enrollment_year_survives_filtering_and_reaches_the_user(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """학적사항이 밝힌 입학 학년도는 날짜만 있는 기록에 학년을 붙이는 기준점이라
+    사용자에 남아야 한다. 미래 학년 걸러내기가 결과를 다시 만들 때 이 값을
+    떨어뜨린 적이 있다 — 기록만 덜어 내고 기준점은 가져가야 한다."""
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(
+            freshman_academic_year=2018,
+            attendance=list(FAKE_RESULT.attendance),
+        )
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+    await client.post(
+        "/api/v1/profile",
+        json={
+            "name": "홍길동",
+            "grade": 2,
+            "semester": 1,
+            "career_goal": {"goal": "해양 연구원"},
+            "target_department": "해양학과",
+            "interest_keywords": ["해양"],
+            "career_specificity": {"level": "broad"},
+        },
+        headers=auth_headers,
+    )
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+    await client.post(
+        f"/api/v1/seteuk/uploads/{created['upload_id']}/import", json={}, headers=auth_headers
+    )
+
+    async with TestSessionLocal() as db:
+        user = await db.scalar(select(User))
+    assert user is not None and user.freshman_academic_year == 2018

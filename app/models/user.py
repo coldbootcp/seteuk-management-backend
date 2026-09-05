@@ -22,6 +22,11 @@ class User(Base):
     # Current factual status, not a subjective answer — kept separate from
     # student_interests. No auto-advance-by-calendar logic yet (deferred).
     current_grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 학적사항이 밝힌 "1학년이었던 학년도"(예: 2018). 날짜만 있고 학년이 없는
+    # 기록에 학년-학기를 붙이는 기준점이라, 생기부를 반영할 때 저장해 두고 이후의
+    # 다른 기록에도 쓴다. 바깥 시계로는 대신할 수 없다 — 생기부는 몇 해 전 문서일
+    # 수 있어서 오늘 날짜로 거꾸로 세면 모든 기록이 학년 범위 밖으로 떨어진다.
+    freshman_academic_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     current_semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kakao_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

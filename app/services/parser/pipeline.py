@@ -9,6 +9,7 @@ from app.services.parser.behavior import BehaviorBlock, parse_behavior_blocks
 from app.services.parser.blocks import slice_subject_blocks
 from app.services.parser.career import parse_career_aspirations
 from app.services.parser.changche import ChangcheBlock, parse_changche_blocks
+from app.services.parser.enrollment import parse_freshman_academic_year
 from app.services.parser.extract import extract_tables, extract_text, strip_noise
 from app.services.parser.grades import (
     extract_subject_names_from_text,
@@ -147,7 +148,9 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     academic_performance = parse_academic_performance_from_text(
         sections.get("교과학습발달상황", "")
     ) or parse_academic_performance(sections.get("교과학습발달상황", ""))
-    awards = parse_awards(tables)
+    # 날짜만 있는 기록(수상)에 학년을 붙이려면 기준점이 먼저 있어야 한다.
+    freshman_academic_year = parse_freshman_academic_year(sections.get("학적사항", ""))
+    awards = parse_awards(tables, freshman_academic_year)
     volunteer_records = parse_volunteer_records(tables)
     reading_activities = parse_reading_activities(tables)
     career_activities = parse_career_aspirations(tables)
@@ -159,6 +162,7 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     llm_activities, errors = await _run_llm_jobs(jobs)
 
     return SeteukAnalysisResult(
+        freshman_academic_year=freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,
         reading_activities=reading_activities,
