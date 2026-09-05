@@ -6,7 +6,10 @@ from app.models.activity import ActivityCategory
 from app.schemas.seteuk import ActivityItem, ParseError, SeteukAnalysisResult
 from app.services.parser.attendance import parse_attendance, parse_attendance_from_tables
 from app.services.parser.behavior import BehaviorBlock, parse_behavior_blocks
-from app.services.parser.blocks import slice_subject_blocks
+from app.services.parser.blocks import (
+    infer_semester_from_single_semester_subjects,
+    slice_subject_blocks,
+)
 from app.services.parser.career import parse_career_aspirations
 from app.services.parser.changche import ChangcheBlock, parse_changche_blocks
 from app.services.parser.enrollment import parse_freshman_academic_year
@@ -43,10 +46,20 @@ class _LLMJob:
     category: ActivityCategory
 
 
-def _build_llm_jobs(sections: dict[str, str], subjects: list[str], tables: list) -> list[_LLMJob]:
+def _build_llm_jobs(
+    sections: dict[str, str],
+    subjects: list[str],
+    tables: list,
+    academic_performance: list,
+) -> list[_LLMJob]:
     jobs: list[_LLMJob] = []
 
     seteuk_blocks = slice_subject_blocks(sections.get("교과학습발달상황", ""), subjects)
+    # 세특 본문에 학기 표시가 없어도, 성적표에서 한 학기에만 개설된 것으로 확인된
+    # 과목이면 그 학기로 채운다 — 문서 안의 다른 근거이지 추측이 아니다.
+    seteuk_blocks = infer_semester_from_single_semester_subjects(
+        seteuk_blocks, academic_performance
+    )
     for i, block in enumerate(seteuk_blocks):
         block_id = f"activities_{block.grade}-{block.semester or 0}_과목세부특기사항_{i:02d}"
         jobs.append(
@@ -158,7 +171,7 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     subjects = extract_subject_names_from_text(sections.get("교과학습발달상황", "")) or sorted(
         {item.subject for item in academic_performance}
     )
-    jobs = _build_llm_jobs(sections, subjects, tables)
+    jobs = _build_llm_jobs(sections, subjects, tables, academic_performance)
     llm_activities, errors = await _run_llm_jobs(jobs)
 
     return SeteukAnalysisResult(

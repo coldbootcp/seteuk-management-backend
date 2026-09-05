@@ -1,6 +1,7 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from app.schemas.seteuk import AcademicPerformanceItem
 from app.services.parser.anchors import (
     GRADE_HEADER_PATTERN,
     nearest_preceding,
@@ -90,3 +91,32 @@ def slice_grade_semester_blocks(section_text: str) -> list[TextBlock]:
                 )
 
     return blocks
+
+
+def infer_semester_from_single_semester_subjects(
+    blocks: list[TextBlock], grades: list[AcademicPerformanceItem]
+) -> list[TextBlock]:
+    """세특 본문은 학기를 나누지 않는 경우가 많다(과목당 한 덩어리로 쓰여 있다).
+    하지만 몇몇 과목은 한 학기에만 개설된다 — 성적표에 그 과목의 단위수가 한
+    학기에만 있다면, 다음 학기엔 그 과목 자체가 없었다는 뜻이라 그 과목의 세특도
+    그 학기의 것일 수밖에 없다(실제 생기부에서 "로봇 제작", "보건", "물리학Ⅱ"
+    등 9개 과목이 이 경우였다).
+
+    이미 다른 근거로 학기를 아는 블록은 건드리지 않는다. 한 과목이 두 학기 모두
+    성적이 있으면 이 방법으로는 판단할 수 없으므로 그대로 학년 단위로 둔다 —
+    지어내지 않는 편이 낫다.
+    """
+    semesters_by_subject: dict[tuple[int, str], set[int]] = {}
+    for g in grades:
+        semesters_by_subject.setdefault((g.grade, g.subject), set()).add(g.semester)
+
+    filled: list[TextBlock] = []
+    for block in blocks:
+        if block.semester is not None or block.subject is None:
+            filled.append(block)
+            continue
+        semesters = semesters_by_subject.get((block.grade, block.subject))
+        if semesters is not None and len(semesters) == 1:
+            block = replace(block, semester=next(iter(semesters)))
+        filled.append(block)
+    return filled

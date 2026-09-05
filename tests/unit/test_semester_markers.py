@@ -40,3 +40,46 @@ def test_a_grade_block_without_real_markers_stays_year_level() -> None:
     text = "[1학년]\n교과\n과목\n1학기\n2학기\n비고\n자율활동: 학급 행사를 준비함.\n"
     blocks = slice_grade_semester_blocks(text)
     assert [(b.grade, b.semester) for b in blocks] == [(1, None)]
+
+
+def test_semester_is_inferred_from_a_subject_taught_in_only_one_semester() -> None:
+    """세특 본문에 학기 표시가 없어도, 성적표에 그 과목의 단위수가 한 학기에만
+    있으면(다음 학기엔 그 과목 자체가 없었다는 뜻) 세특도 그 학기의 것일 수밖에
+    없다. 실제 생기부에서 "로봇 제작", "보건", "물리학Ⅱ" 등 9개 과목이 이랬다."""
+    from app.schemas.seteuk import AcademicPerformanceItem
+    from app.services.parser.blocks import (
+        TextBlock,
+        infer_semester_from_single_semester_subjects,
+    )
+
+    blocks = [
+        TextBlock(grade=2, semester=None, subject="보건", text="응급처치 실습을 진행함."),
+        TextBlock(grade=2, semester=None, subject="수학Ⅰ", text="이차곡선을 탐구함."),
+    ]
+    grades = [
+        AcademicPerformanceItem(grade=2, semester=1, category="교양", subject="보건"),
+        AcademicPerformanceItem(grade=2, semester=1, category="수학", subject="수학Ⅰ"),
+        AcademicPerformanceItem(grade=2, semester=2, category="수학", subject="수학Ⅰ"),
+    ]
+
+    filled = infer_semester_from_single_semester_subjects(blocks, grades)
+
+    # 보건은 1학기에만 성적이 있어 판정할 수 있다.
+    assert filled[0].semester == 1
+    # 수학Ⅰ은 두 학기 모두 성적이 있어 판정할 수 없다 — 지어내지 않는다.
+    assert filled[1].semester is None
+
+
+def test_a_block_with_a_known_semester_is_not_overridden() -> None:
+    """본문에 이미 학기 표시가 있는 블록은 성적표 추론으로 덮어쓰지 않는다."""
+    from app.schemas.seteuk import AcademicPerformanceItem
+    from app.services.parser.blocks import (
+        TextBlock,
+        infer_semester_from_single_semester_subjects,
+    )
+
+    blocks = [TextBlock(grade=1, semester=2, subject="보건", text="...")]
+    grades = [AcademicPerformanceItem(grade=1, semester=1, category="교양", subject="보건")]
+
+    filled = infer_semester_from_single_semester_subjects(blocks, grades)
+    assert filled[0].semester == 2
