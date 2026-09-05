@@ -17,6 +17,16 @@ class TextBlock:
     text: str
 
 
+def _flexible_whitespace(name: str) -> str:
+    """과목명 내부의 공백은 PDF 줄바꿈이 남긴 흔적이라 위치가 문서 안에서도
+    들쭉날쭉하다 — 예를 들어 "로봇 소프트웨어 개발"이 성적표 열에서는 줄바꿈에
+    걸려 "로봇 소프트웨\\n어 개발"이 되지만, 세특 본문에서는 줄바꿈 없이
+    "로봇 소프트웨어 개발"로 그대로 나온다. 공백을 문자 그대로 요구하면 후자를
+    앵커로 못 찾아 그 과목의 세특 전체가 조용히 사라진다(실제로 그랬다).
+    """
+    return r"\s*".join(re.escape(part) for part in name.split())
+
+
 def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlock]:
     """Split 세특 text on subject-name anchors from the whitelist extracted by grades.py.
 
@@ -28,9 +38,12 @@ def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlo
         return []
 
     ordered_subjects = sorted(set(subjects), key=len, reverse=True)
-    anchor_pattern = re.compile(
-        "(" + "|".join(re.escape(s) for s in ordered_subjects) + r")\s*(?:\([^)]*\))?\s*:"
-    )
+    # 공백을 지운 형태로 정본을 되찾는다 — 매칭된 텍스트가 줄바꿈 흔적 없는 표기여도
+    # academic_performance와 같은 문자열(정본)을 subject로 남겨야 한 학기에만
+    # 개설된 과목 추론 등 다른 곳과 키가 어긋나지 않는다.
+    canonical_by_compact = {re.sub(r"\s+", "", s): s for s in ordered_subjects}
+    alternation = "|".join(_flexible_whitespace(s) for s in ordered_subjects)
+    anchor_pattern = re.compile("(" + alternation + r")\s*(?:\([^)]*\))?\s*:")
     anchors = list(anchor_pattern.finditer(section_text))
     grade_headers = list(GRADE_HEADER_PATTERN.finditer(section_text))
     semester_labels = semester_markers(section_text)
@@ -49,11 +62,13 @@ def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlo
             continue
 
         semester_anchor = nearest_preceding(semester_labels, anchor.start())
+        matched = anchor.group(1)
+        subject = canonical_by_compact.get(re.sub(r"\s+", "", matched), matched)
         blocks.append(
             TextBlock(
                 grade=int(grade_anchor.group(1)),
                 semester=int(semester_anchor.group(1)) if semester_anchor else None,
-                subject=anchor.group(1),
+                subject=subject,
                 text=text,
             )
         )
