@@ -152,8 +152,9 @@ docs/
 
 - [x] **프론트엔드 통합 + 실사용 검증** — 소유자가 제공한 별도 프론트엔드
   (`coldbootcp/seteuk-management-frontend`)에 이 백엔드를 통합했다. 목적은 **프론트엔드가
-  자체적으로 DeepSeek을 호출하던 구조를 없애고 그 일을 백엔드가 맡는 것**이고, 화면의
-  형태는 바꾸지 않는다(자세한 경계는 `docs/HANDOFF.md` 3절). 앞서 만든
+  자체적으로 DeepSeek을 호출하던 구조를 없애고 그 일을 백엔드가 맡는 것**이었고, 그
+  기간에는 화면의 형태를 바꾸지 않았다. **통합이 끝나며 이 제약은 해제됐다** — 지금은
+  새 화면을 만들어도 된다(`docs/HANDOFF.md` 3절). 앞서 만든
   `../20260826frontend`는 이 통합으로 대체돼 더 이상 쓰지 않는다.
   백엔드 쪽으로 포팅한 것: 서사 로드맵 생성, 활동↔로드맵 정합 판정(`reconciliation_logs`),
   학기 마디의 수강 과목 연결, 생기부 원본 보관과 첨부파일, 하네스 경계와
@@ -194,8 +195,8 @@ docs/
 - **후속 추천과 진단 상세는 백엔드에만 있고 화면 경로가 없다.**
   `POST /recommendations/follow-up`·`adopt`, 그리고 진단의 `semester_reviews`·
   `grades_trend`·`activity_inventory`·`knowledge_graph_links`·`opportunities`가
-  계산만 되고 프론트엔드가 호출하지 않는다. 화면을 새로 만드는 일이라 소유자 확인이
-  먼저다(`docs/HANDOFF.md` 8절).
+  계산만 되고 프론트엔드가 호출하지 않는다. UI 제약이 해제됐으므로 이제 붙이면 된다 —
+  진단 파이프라인이 만드는 것의 절반 이상이 화면에 안 나오는 셈이다.
 - 두 저장소 모두 아직 `main`에 머지되지 않았다. 백엔드 `feat/planning-chatbot-recommendations`
   (PR #1)와 프론트엔드 `feat/backend-integration`(PR #1)은 서로 의존하므로 **함께**
   머지해야 한다.
