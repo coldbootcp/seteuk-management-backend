@@ -177,6 +177,7 @@ class AwardRead(RecordBase):
 
 class VolunteerRecordCreate(BaseModel):
     grade: int = Field(ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
     date: date_type | None = None
     raw_date: str | None = None
     place: str | None = None
@@ -186,6 +187,7 @@ class VolunteerRecordCreate(BaseModel):
 
 class VolunteerRecordUpdate(BaseModel):
     grade: int | None = Field(default=None, ge=1, le=3)
+    semester: int | None = Field(default=None, ge=1, le=2)
     date: date_type | None = None
     raw_date: str | None = None
     place: str | None = None
@@ -195,6 +197,7 @@ class VolunteerRecordUpdate(BaseModel):
 
 class VolunteerRecordRead(RecordBase):
     grade: int
+    semester: int | None
     date: date_type | None
     raw_date: str | None
     place: str | None

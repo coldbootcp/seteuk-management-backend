@@ -49,6 +49,8 @@ class AwardItem(BaseModel):
 
 class VolunteerRecordItem(BaseModel):
     grade: int
+    # 봉사활동실적 표는 학년만 열로 갖지만 일자가 있어 학기까지 정할 수 있다.
+    semester: int | None = None
     date: datetime.date | None = None
     raw_date: str | None = None
     place: str | None = None

@@ -11,8 +11,11 @@ AWARDS_TABLE = [
     ["수학 경시대회", "금상(1위)", "2023.05.20"],
 ]
 
+# 실제 생기부는 제목 행("학 년 | 봉 사 활 동 실 적")이 먼저 오고 머리글이 둘째
+# 행에 온다. 봉사 파서는 그 제목으로 자기 표를 알아본다.
 VOLUNTEER_TABLE = [
-    ["학년", "일자", "장소", "내용", "시간"],
+    ["학 년", "봉 사 활 동 실 적", "", "", ""],
+    ["", "일자", "장소", "내용", "시간"],
     ["2", "2023.07.15", "지역아동센터", "학습 멘토링", "8"],
 ]
 
@@ -83,7 +86,8 @@ def test_parse_volunteer_records_collapses_line_wrap_to_a_space() -> None:
     # rather than removed outright, since there's no reliable way to tell a mid-word
     # wrap ("종\n료" -> "종료") apart from a wrap between two separate words.
     table = [
-        ["학년", "일자", "장소", "내용", "시간"],
+        ["학 년", "봉 사 활 동 실 적", "", "", ""],
+        ["", "일자", "장소", "내용", "시간"],
         ["1", "2023.05.17.", "가온고등학교", "교내 스포츠 어울마당 종\n료 후 교내 환경정리", "1"],
     ]
 
@@ -203,3 +207,29 @@ def test_reading_table_with_a_section_title_row_is_not_skipped() -> None:
         (1, 1, "아몬드"),
         (1, 2, "미적분으로 바라본 하루"),
     ]
+
+
+def test_volunteer_semester_comes_from_the_date() -> None:
+    """봉사활동실적 표는 학년만 열로 갖지만 일자가 있다. 학기까지 정할 수 있으면
+    흐름 맵이 그 학기에만 놓을 수 있다 — 비어 있으면 학년 단위로 두 학기에
+    함께 보여야 한다."""
+    table = [
+        ["학 년", "봉 사 활 동 실 적", "", "", "", ""],
+        ["", "일자 또는 기간", "장소 또는 주관기관명", "활동내용", "시간", "누계시간"],
+        ["1", "2018.03.23.", "(학교)가온고등학교", "봉사활동 사전교육", "1", "1"],
+        ["", "2018.11.05.", "(개인)문기지역아동센터", "학습지도", "2", "3"],
+    ]
+    items = parse_volunteer_records([table])
+
+    assert [(i.grade, i.semester) for i in items] == [(1, 1), (1, 2)]
+    assert [i.hours for i in items] == [1, 2]
+
+
+def test_only_the_volunteer_table_is_read() -> None:
+    """"내용"이라는 낱말만으로 표를 고르면 세특처럼 본문에 그 말이 우연히 들어간
+    표까지 걸린다. 실제 생기부에서 세특 표 하나가 봉사 파서에 잡혔다."""
+    seteuk = [
+        ["과목", "세 부 능 력 및 특 기 사 항"],
+        ["1", "한국사: 답사 보고서의 내용을 일자별로 정리하고 3시간에 걸쳐 발표함"],
+    ]
+    assert parse_volunteer_records([seteuk]) == []

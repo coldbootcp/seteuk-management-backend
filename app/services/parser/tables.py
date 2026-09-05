@@ -1,7 +1,7 @@
 import re
 
 from app.schemas.seteuk import AwardItem, ReadingActivityItem, VolunteerRecordItem
-from app.services.academic_year import period_for
+from app.services.academic_year import period_for, semester_of
 from app.services.parser.dates import normalize_date
 
 Table = list[list[str | None]]
@@ -134,10 +134,13 @@ def parse_volunteer_records(tables: list[Table]) -> list[VolunteerRecordItem]:
     for table in tables:
         if len(table) < 2:
             continue
-        # The "학년" label only appears in the table's merged title row, not on the
-        # actual column-header row below it — that row is identified by 활동내용
-        # instead, and 학년 is always its unlabeled leftmost column.
-        header_row_idx = _find_header_row(table, required=("내용",))
+        # 봉사는 "봉 사 활 동 실 적" 표에서만 읽는다. "내용"이라는 낱말만으로 표를
+        # 고르면 세특처럼 본문에 그 말이 우연히 들어간 표까지 걸린다(실제로 걸렸다).
+        # 제목 행에 봉사가 적혀 있고, 머리글에 일자와 시간이 함께 있어야 그 표다.
+        # 자간 공백("봉 사 활 동")은 이 문서의 제목 행 관례라 지우고 본다.
+        if "봉사활동" not in "".join(_clean_text(c) for c in table[0]).replace(" ", ""):
+            continue
+        header_row_idx = _find_header_row(table, required=("내용", "일자", "시간"))
         if header_row_idx is None:
             continue
 
@@ -154,10 +157,14 @@ def parse_volunteer_records(tables: list[Table]) -> list[VolunteerRecordItem]:
                 continue
             raw_date = _cell(row, date_idx)
             hours_raw = _cell(row, hours_idx)
+            # 학년은 표가 직접 알려 주고, 학기는 날짜의 달에서 나온다
+            # (3~8월 1학기, 9~2월 2학기).
+            date = normalize_date(raw_date)
             items.append(
                 VolunteerRecordItem(
                     grade=int(grade_raw),
-                    date=normalize_date(raw_date),
+                    semester=semester_of(date) if date else None,
+                    date=date,
                     raw_date=raw_date,
                     place=_cell(row, place_idx),
                     content=_cell(row, content_idx),
