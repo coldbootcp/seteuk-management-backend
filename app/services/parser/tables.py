@@ -80,7 +80,16 @@ def parse_awards(tables: list[Table], freshman_year: int | None = None) -> list[
     for table in tables:
         if len(table) < 2:
             continue
-        header = [_clean_text(c) for c in table[0]]
+        # 수상 표도 첫 행이 섹션 제목("4. 수 상 경 력")이고 진짜 머리글이 둘째 행에
+        # 오는 경우가 있다. 첫 행만 보면 그 표를 통째로 건너뛰어, 실제 생기부에서
+        # 1학년 수상 14건이 조용히 사라진 적이 있다(봉사 표는 이미 같은 방식으로
+        # 두 행을 본다).
+        header_row_idx = _find_header_row(table, required=("수상명",)) 
+        if header_row_idx is None:
+            header_row_idx = _find_header_row(table, required=("대회",))
+        if header_row_idx is None:
+            continue
+        header = [_clean_text(c) for c in table[header_row_idx]]
         name_idx = _header_index(header, "대회", "수상명")
         rank_idx = _header_index(header, "등급", "수상실적")
         date_idx = _header_index(header, "일자", "날짜", "연월일")
@@ -90,7 +99,7 @@ def parse_awards(tables: list[Table], freshman_year: int | None = None) -> list[
 
         # No forward-fill here — unlike 학년/과목 grouping columns elsewhere, a blank
         # 등급 cell genuinely means "no rank awarded", not "same rank as the row above".
-        for raw_row in table[1:]:
+        for raw_row in table[header_row_idx + 1 :]:
             cells = [_clean_text(c) for c in raw_row]
             name = _cell(cells, name_idx)
             if not name:
@@ -177,7 +186,13 @@ def parse_reading_activities(tables: list[Table]) -> list[ReadingActivityItem]:
     for table in tables:
         if len(table) < 2:
             continue
-        header = [_clean_text(c) for c in table[0]]
+        # 수상 표와 같은 함정 — 첫 행이 섹션 제목("9. 독서활동상황")이고 진짜
+        # 머리글은 둘째 행에 있다. 첫 행만 보면 그 표를 통째로 건너뛰어, 실제
+        # 생기부에서 1학년 독서가 전부 사라졌다.
+        header_row_idx = _find_header_row(table, required=("학년",))
+        if header_row_idx is None:
+            continue
+        header = [_clean_text(c) for c in table[header_row_idx]]
         grade_idx = _header_index(header, "학년")
         subject_idx = _header_index(header, "과목", "교과", "영역")
         title_idx = _header_index(header, "도서명", "제목")
@@ -188,7 +203,7 @@ def parse_reading_activities(tables: list[Table]) -> list[ReadingActivityItem]:
             # One book per row, title/author already split into their own columns.
             semester_idx = _header_index(header, "학기")
             author_idx = _header_index(header, "저자")
-            for row in _forward_fill(table[1:]):
+            for row in _forward_fill(table[header_row_idx + 1 :]):
                 grade_raw = _cell(row, grade_idx)
                 title = _cell(row, title_idx)
                 if not grade_raw or not grade_raw.isdigit() or not title:
@@ -213,7 +228,7 @@ def parse_reading_activities(tables: list[Table]) -> list[ReadingActivityItem]:
         if content_idx is None:
             continue
 
-        for row in _forward_fill(table[1:]):
+        for row in _forward_fill(table[header_row_idx + 1 :]):
             grade_raw = _cell(row, grade_idx)
             content = _cell(row, content_idx)
             if not grade_raw or not grade_raw.isdigit() or not content:

@@ -167,3 +167,39 @@ def test_award_period_is_left_empty_without_an_anchor() -> None:
     [item] = parse_awards([table])
     assert item.grade is None and item.semester is None
     assert item.participants == "3학년(216명)"
+
+
+def test_award_table_with_a_section_title_row_is_not_skipped() -> None:
+    """수상 표도 첫 행이 섹션 제목("4. 수 상 경 력")이고 진짜 머리글이 둘째 행에
+    오는 경우가 있다. 첫 행만 머리글로 보면 그 표를 통째로 건너뛴다 — 실제
+    생기부에서 1학년 수상 14건이 이렇게 조용히 사라졌다."""
+    table = [
+        ["4. 수 상 경 력", "", "", "", ""],
+        ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
+        ["영시공모전", "우수상(2위)", "2018.07.19.", "가온고", "1·2학년 중 참가자(147명)"],
+        ["수학독서발표대회", "우수상(2위)", "2018.09.20.", "가온고", "1학년 중 참가자(38명)"],
+    ]
+    items = parse_awards([table], freshman_year=2018)
+
+    assert [i.name for i in items] == ["영시공모전", "수학독서발표대회"]
+    assert [(i.grade, i.semester) for i in items] == [(1, 1), (1, 2)]
+    # 제목 행이 기록으로 새어 들어오면 안 된다.
+    assert "4. 수 상 경 력" not in [i.name for i in items]
+
+
+def test_reading_table_with_a_section_title_row_is_not_skipped() -> None:
+    """독서 표도 첫 행이 섹션 제목("9. 독서활동상황")이고 진짜 머리글이 둘째 행에
+    온다. 첫 행만 보면 그 표를 통째로 건너뛰어 1학년 독서가 전부 사라졌다."""
+    table = [
+        ["9. 독서활동상황", "", ""],
+        ["학 년", "과목 또는 영역", "독서활동 상황"],
+        ["1", "국어", "(1학기) 죽은 시인의 사회(N.H. 클라인 바움), 아몬드(손원평)"],
+        ["", "수학", "(2학기) 미적분으로 바라본 하루(오스카 페르난데스)"],
+    ]
+    items = parse_reading_activities([table])
+
+    assert [(i.grade, i.semester, i.title) for i in items] == [
+        (1, 1, "죽은 시인의 사회"),
+        (1, 1, "아몬드"),
+        (1, 2, "미적분으로 바라본 하루"),
+    ]
