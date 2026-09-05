@@ -17,6 +17,9 @@ wheels/
 .idea/
 .vscode/
 
+# 파이썬 프로젝트라 npm은 쓰지 않는다 — 실수로 npm install이 돌았을 때 대비
+node_modules/
+
 # Test / coverage
 .pytest_cache/
 .coverage

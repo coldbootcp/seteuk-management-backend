@@ -40,3 +40,73 @@ class UploadNotFoundError(AppError):
 class UploadNotReadyError(AppError):
     status_code = 409
     error_code = "UPLOAD_NOT_READY"
+
+
+class LLMUnavailableError(AppError):
+    status_code = 503
+    error_code = "LLM_UNAVAILABLE"
+
+
+class DiagnosisNotFoundError(AppError):
+    status_code = 404
+    error_code = "DIAGNOSIS_NOT_FOUND"
+
+
+class DiagnosisNotReadyError(AppError):
+    status_code = 409
+    error_code = "DIAGNOSIS_NOT_READY"
+
+
+class RecordNotFoundError(AppError):
+    status_code = 404
+    error_code = "RECORD_NOT_FOUND"
+
+
+class ActivityNotFoundError(AppError):
+    status_code = 404
+    error_code = "ACTIVITY_NOT_FOUND"
+
+
+class PlanItemNotFoundError(AppError):
+    status_code = 404
+    error_code = "PLAN_ITEM_NOT_FOUND"
+
+
+class RoadmapNotFoundError(AppError):
+    status_code = 404
+    error_code = "ROADMAP_NOT_FOUND"
+
+
+class RoadmapNodeNotFoundError(AppError):
+    status_code = 404
+    error_code = "ROADMAP_NODE_NOT_FOUND"
+
+
+class InvalidPlanTransitionError(AppError):
+    status_code = 409
+    error_code = "INVALID_PLAN_TRANSITION"
+
+
+class ConversationNotFoundError(AppError):
+    status_code = 404
+    error_code = "CONVERSATION_NOT_FOUND"
+
+
+class RecommendationNotFoundError(AppError):
+    status_code = 404
+    error_code = "RECOMMENDATION_NOT_FOUND"
+
+
+class ProfileIncompleteError(AppError):
+    status_code = 409
+    error_code = "PROFILE_INCOMPLETE"
+
+
+class SocialAuthError(AppError):
+    status_code = 401
+    error_code = "SOCIAL_AUTH_FAILED"
+
+
+class RateLimitedError(AppError):
+    status_code = 429
+    error_code = "RATE_LIMITED"

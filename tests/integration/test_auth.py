@@ -65,3 +65,39 @@ async def test_refresh_with_access_token_rejected(client: AsyncClient) -> None:
 
     assert response.status_code == 401
     assert response.json()["error_code"] == "INVALID_TOKEN"
+
+
+async def test_logout_revokes_the_refresh_token(client: AsyncClient) -> None:
+    signup_response = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "logout-tester@example.com", "password": "s3cure-passw0rd"},
+    )
+    refresh_token = signup_response.json()["refresh_token"]
+
+    logout = await client.post("/api/v1/auth/logout", json={"refresh_token": refresh_token})
+    assert logout.status_code == 204
+
+    # 로그아웃 후에는 같은 refresh 토큰으로 access를 재발급받을 수 없어야 한다.
+    reused = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert reused.status_code == 401
+    assert reused.json()["error_code"] == "INVALID_TOKEN"
+
+    # 멱등 — 이미 무효화된 토큰으로 다시 로그아웃해도 실패하지 않는다.
+    assert (
+        await client.post("/api/v1/auth/logout", json={"refresh_token": refresh_token})
+    ).status_code == 204
+
+
+async def test_logout_does_not_affect_other_sessions(client: AsyncClient) -> None:
+    await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "two-devices@example.com", "password": "s3cure-passw0rd"},
+    )
+    credentials = {"email": "two-devices@example.com", "password": "s3cure-passw0rd"}
+    phone = (await client.post("/api/v1/auth/login", json=credentials)).json()["refresh_token"]
+    laptop = (await client.post("/api/v1/auth/login", json=credentials)).json()["refresh_token"]
+
+    await client.post("/api/v1/auth/logout", json={"refresh_token": phone})
+
+    still_valid = await client.post("/api/v1/auth/refresh", json={"refresh_token": laptop})
+    assert still_valid.status_code == 200

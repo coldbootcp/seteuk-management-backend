@@ -6,16 +6,20 @@ from app.models.activity import ActivityCategory
 from app.schemas.seteuk import ActivityItem, ParseError, SeteukAnalysisResult
 from app.services.parser.attendance import parse_attendance, parse_attendance_from_tables
 from app.services.parser.behavior import BehaviorBlock, parse_behavior_blocks
-from app.services.parser.blocks import slice_subject_blocks
+from app.services.parser.blocks import (
+    infer_semester_from_single_semester_subjects,
+    slice_subject_blocks,
+)
 from app.services.parser.career import parse_career_aspirations
 from app.services.parser.changche import ChangcheBlock, parse_changche_blocks
+from app.services.parser.enrollment import parse_freshman_academic_year
 from app.services.parser.extract import extract_tables, extract_text, strip_noise
 from app.services.parser.grades import (
     extract_subject_names_from_text,
     parse_academic_performance,
     parse_academic_performance_from_text,
 )
-from app.services.parser.llm import build_client, parse_block
+from app.services.parser.llm import get_provider, parse_block
 from app.services.parser.prompts import (
     CHANGCHE_SYSTEM_PROMPT,
     HAENGBAL_SYSTEM_PROMPT,
@@ -42,10 +46,20 @@ class _LLMJob:
     category: ActivityCategory
 
 
-def _build_llm_jobs(sections: dict[str, str], subjects: list[str], tables: list) -> list[_LLMJob]:
+def _build_llm_jobs(
+    sections: dict[str, str],
+    subjects: list[str],
+    tables: list,
+    academic_performance: list,
+) -> list[_LLMJob]:
     jobs: list[_LLMJob] = []
 
     seteuk_blocks = slice_subject_blocks(sections.get("교과학습발달상황", ""), subjects)
+    # 세특 본문에 학기 표시가 없어도, 성적표에서 한 학기에만 개설된 것으로 확인된
+    # 과목이면 그 학기로 채운다 — 문서 안의 다른 근거이지 추측이 아니다.
+    seteuk_blocks = infer_semester_from_single_semester_subjects(
+        seteuk_blocks, academic_performance
+    )
     for i, block in enumerate(seteuk_blocks):
         block_id = f"activities_{block.grade}-{block.semester or 0}_과목세부특기사항_{i:02d}"
         jobs.append(
@@ -97,7 +111,7 @@ async def _run_llm_jobs(jobs: list[_LLMJob]) -> tuple[list[ActivityItem], list[P
     if not jobs:
         return [], []
 
-    client = build_client()
+    client = get_provider()
     semaphore = asyncio.Semaphore(settings.seteuk_llm_concurrency)
 
     async def _run(job: _LLMJob) -> tuple[_LLMJob, tuple]:
@@ -147,7 +161,9 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     academic_performance = parse_academic_performance_from_text(
         sections.get("교과학습발달상황", "")
     ) or parse_academic_performance(sections.get("교과학습발달상황", ""))
-    awards = parse_awards(tables)
+    # 날짜만 있는 기록(수상)에 학년을 붙이려면 기준점이 먼저 있어야 한다.
+    freshman_academic_year = parse_freshman_academic_year(sections.get("학적사항", ""))
+    awards = parse_awards(tables, freshman_academic_year)
     volunteer_records = parse_volunteer_records(tables)
     reading_activities = parse_reading_activities(tables)
     career_activities = parse_career_aspirations(tables)
@@ -155,10 +171,11 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     subjects = extract_subject_names_from_text(sections.get("교과학습발달상황", "")) or sorted(
         {item.subject for item in academic_performance}
     )
-    jobs = _build_llm_jobs(sections, subjects, tables)
+    jobs = _build_llm_jobs(sections, subjects, tables, academic_performance)
     llm_activities, errors = await _run_llm_jobs(jobs)
 
     return SeteukAnalysisResult(
+        freshman_academic_year=freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,
         reading_activities=reading_activities,
