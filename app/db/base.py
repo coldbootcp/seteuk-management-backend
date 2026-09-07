@@ -13,6 +13,7 @@ from app.models import activity_review as _activity_review  # noqa: E402, F401
 from app.models import activity_thread as _activity_thread  # noqa: E402, F401
 from app.models import attendance as _attendance  # noqa: E402, F401
 from app.models import award as _award  # noqa: E402, F401
+from app.models import consultation as _consultation  # noqa: E402, F401
 from app.models import conversation as _conversation  # noqa: E402, F401
 from app.models import diagnosis as _diagnosis  # noqa: E402, F401
 from app.models import plan_item as _plan_item  # noqa: E402, F401

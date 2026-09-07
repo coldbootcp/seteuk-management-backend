@@ -258,7 +258,13 @@ async def get_result(
     upload = await get_upload(db, user_id, upload_id)
     if upload.status != UploadStatus.DONE.value or upload.raw_result is None:
         raise UploadNotReadyError("파싱이 완료되지 않았습니다")
-    return SeteukAnalysisResult.model_validate(upload.raw_result)
+    result = SeteukAnalysisResult.model_validate(upload.raw_result)
+    user = await db.get(User, user_id)
+    if user and user.current_grade is not None:
+        result = _filter_future_grade_data(
+            result, user.current_grade, user.current_semester
+        )
+    return result
 
 
 async def get_upload_file(
@@ -336,9 +342,14 @@ async def import_result(
     if upload.status != UploadStatus.DONE.value or upload.raw_result is None:
         raise UploadNotReadyError("파싱이 완료되지 않았습니다")
 
-    parsed = _apply_period_overrides(
-        SeteukAnalysisResult.model_validate(upload.raw_result), selection
-    )
+    user = await db.get(User, user_id)
+    raw = SeteukAnalysisResult.model_validate(upload.raw_result)
+    if user and user.current_grade is not None:
+        raw = _filter_future_grade_data(
+            raw, user.current_grade, user.current_semester
+        )
+
+    parsed = _apply_period_overrides(raw, selection)
 
     # 학적사항이 밝힌 입학 학년도를 사용자에 남긴다. 날짜만 있는 기록에 학년을 붙일
     # 때 쓰는 기준점이라, 이 업로드가 끝난 뒤에도 필요하다.

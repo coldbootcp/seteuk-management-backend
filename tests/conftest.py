@@ -1,13 +1,17 @@
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
 import pytest
+from fastapi import Depends
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.core.dependencies import get_current_user, require_consultation_satisfied
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.user import User
 
 TEST_DATABASE_URL = get_settings().database_url.rsplit("/", 1)[0] + "/seteuk_test"
 
@@ -30,6 +34,17 @@ async def _override_get_db() -> AsyncGenerator[AsyncSession]:
 
 
 app.dependency_overrides[get_db] = _override_get_db
+
+
+async def _bypass_consultation_gate(user: Annotated[User, Depends(get_current_user)]) -> User:
+    """대부분의 기존 통합 테스트는 로드맵/계획/기록 자체를 검증하는 것이지 진단+상담
+    관문을 검증하는 게 아니므로, 기본적으로 관문을 통과시킨다. 관문 자체를 검증하는
+    테스트(test_consultation.py)는 이 오버라이드를 일시적으로 제거하고 실제
+    require_consultation_satisfied를 쓴다."""
+    return user
+
+
+app.dependency_overrides[require_consultation_satisfied] = _bypass_consultation_gate
 
 
 @pytest.fixture

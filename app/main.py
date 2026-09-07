@@ -58,7 +58,7 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     logger.info("app error", error_code=exc.error_code, message=exc.message)
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error_code": exc.error_code, "message": exc.message},
+        content={"error_code": exc.error_code, "message": exc.message, **exc.extra},
     )
 
 

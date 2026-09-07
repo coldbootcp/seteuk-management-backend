@@ -23,6 +23,16 @@ class ChatMode(StrEnum):
     EDIT = "edit"
 
 
+class ConversationPurpose(StrEnum):
+    """일반 잡담과 진단+상담 관문을 통과시키는 상담 대화를 구분한다. 관문
+    의존성(require_consultation_satisfied)이 general 대화에는 걸리지만 상담
+    대화 자체는 관문을 통과하기 위한 경로라 걸리지 않는다."""
+
+    GENERAL = "general"
+    INITIAL_CONSULTATION = "initial_consultation"
+    SEMESTER_REVIEW_CONSULTATION = "semester_review_consultation"
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -33,6 +43,9 @@ class Conversation(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(40), nullable=False, default=ConversationPurpose.GENERAL.value
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

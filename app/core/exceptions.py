@@ -2,8 +2,9 @@ class AppError(Exception):
     status_code: int = 400
     error_code: str = "BAD_REQUEST"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, extra: dict | None = None) -> None:
         self.message = message
+        self.extra = extra or {}
         super().__init__(message)
 
 
@@ -110,3 +111,20 @@ class SocialAuthError(AppError):
 class RateLimitedError(AppError):
     status_code = 429
     error_code = "RATE_LIMITED"
+
+
+class ConsultationRequiredError(AppError):
+    status_code = 403
+    error_code = "CONSULTATION_REQUIRED"
+
+
+class ConsultationSessionNotFoundError(AppError):
+    status_code = 404
+    error_code = "CONSULTATION_SESSION_NOT_FOUND"
+
+
+class ConsultationNotReadyError(AppError):
+    """conclude를 챗봇의 종료 신호 없이 부르려는 시도."""
+
+    status_code = 409
+    error_code = "CONSULTATION_NOT_READY"

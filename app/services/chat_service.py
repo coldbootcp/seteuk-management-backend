@@ -19,10 +19,23 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConversationNotFoundError, LLMUnavailableError
+from app.core.exceptions import (
+    ConsultationSessionNotFoundError,
+    ConversationNotFoundError,
+    LLMUnavailableError,
+)
 from app.db.session import AsyncSessionLocal
+from app.models.consultation import ConsultationStatus
 from app.models.conversation import ChatMode, Conversation, Message, MessageRole
 from app.models.user import User
+from app.services import consultation_service
+from app.services.chat.consultation_prompts import build_consultation_system_prompt
+from app.services.chat.consultation_tools import (
+    TOOL_SPECS as CONSULTATION_TOOL_SPECS,
+)
+from app.services.chat.consultation_tools import (
+    execute_consultation_tool,
+)
 from app.services.chat.context import build_context
 from app.services.chat.prompts import build_system_prompt
 from app.services.chat.tools import TOOL_SPECS, execute_tool
@@ -299,5 +312,193 @@ async def stream_reply(
             {
                 "message_id": str(assistant_message.id) if assistant_message else None,
                 "applied_actions": applied_actions,
+            },
+        )
+
+
+async def stream_consultation_reply(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    content: str,
+) -> AsyncIterator[str]:
+    """상담 챗봇의 대화 턴. stream_reply와 SSE 프레이밍/도구 루프는 같지만, 도구가
+    실제 기록이 아니라 ConsultationSession.draft_plan만 바꾸고, 매 턴 끝에 readiness를
+    알리는 signal 이벤트를 추가로 낸다 — 대화가 이어지면 이전 턴의 '준비됨'은
+    취소된다는 요구를 여기서 구현한다."""
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is None:
+            yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
+            return
+
+        try:
+            session = await consultation_service.get_session(db, user_id, session_id)
+        except ConsultationSessionNotFoundError as exc:
+            yield _sse(
+                "error",
+                {"error_code": "CONSULTATION_SESSION_NOT_FOUND", "message": exc.message},
+            )
+            return
+
+        conversation_id = session.conversation_id
+        conversation = await db.get(Conversation, conversation_id)
+
+        user_message = Message(
+            conversation_id=conversation_id,
+            role=MessageRole.USER.value,
+            content=content,
+            mode=ChatMode.NORMAL.value,
+        )
+        db.add(user_message)
+        if conversation is not None and conversation.title is None:
+            conversation.title = " ".join(content.split())[:TITLE_LIMIT]
+
+        # 이 턴이 다시 signal_ready_to_conclude를 부르지 않으면 '준비됨'이 취소된다 —
+        # 대화가 이어졌다는 것 자체가 상담이 아직 안 끝났다는 뜻이기 때문이다.
+        was_ready = session.status == ConsultationStatus.READY.value
+        if was_ready:
+            session.status = ConsultationStatus.IN_PROGRESS.value
+            session.ready_at = None
+
+        await _touch(db, conversation_id)
+        await db.commit()
+
+        history = await db.scalars(
+            select(Message)
+            .where(Message.conversation_id == conversation_id, Message.id != user_message.id)
+            .order_by(Message.created_at.desc())
+            .limit(HISTORY_LIMIT)
+        )
+        context = await build_context(db, user)
+        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+
+        llm_messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": build_consultation_system_prompt(
+                    session.kind,
+                    json.dumps(context, ensure_ascii=False),
+                    json.dumps(roadmap_summary, ensure_ascii=False)
+                    if roadmap_summary is not None
+                    else None,
+                ),
+            }
+        ]
+        llm_messages.extend(
+            {"role": m.role, "content": m.content} for m in reversed(list(history))
+        )
+        llm_messages.append({"role": "user", "content": content})
+
+        applied_actions: list[dict[str, Any]] = []
+        answer_parts: list[str] = []
+        error_payload: dict[str, Any] | None = None
+
+        try:
+            for _ in range(MAX_TOOL_ROUNDS):
+                round_text: list[str] = []
+                tool_calls: dict[int, dict[str, Any]] = {}
+
+                async for chunk in stream_chat(llm_messages, CONSULTATION_TOOL_SPECS):
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        if not round_text and answer_parts:
+                            answer_parts.append("\n\n")
+                            yield _sse("token", {"delta": "\n\n"})
+                        round_text.append(delta.content)
+                        yield _sse("token", {"delta": delta.content})
+                    if delta.tool_calls:
+                        _merge_tool_call_deltas(tool_calls, delta.tool_calls)
+
+                answer_parts.extend(round_text)
+                if not tool_calls:
+                    break
+
+                llm_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "".join(round_text) or None,
+                        "tool_calls": [
+                            {
+                                "id": call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": call["arguments"] or "{}",
+                                },
+                            }
+                            for call in tool_calls.values()
+                        ],
+                    }
+                )
+
+                for call in tool_calls.values():
+                    try:
+                        arguments = json.loads(call["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        arguments = {}
+                        result: dict[str, Any] = {"error": "도구 인자를 해석하지 못했습니다"}
+                    else:
+                        result = await execute_consultation_tool(
+                            db, user, session, call["name"], arguments
+                        )
+
+                    action = {"tool": call["name"], "arguments": arguments, "result": result}
+                    applied_actions.append(action)
+                    yield _sse("action", action)
+                    llm_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(result, ensure_ascii=False, default=str),
+                        }
+                    )
+            else:
+                logger.warning(
+                    "consultation tool loop hit the round limit: session_id=%s", session_id
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                _persist_assistant_turn(
+                    db,
+                    conversation_id,
+                    ChatMode.NORMAL,
+                    "".join(answer_parts),
+                    applied_actions,
+                )
+            )
+            raise
+        except LLMUnavailableError as exc:
+            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
+        except Exception:
+            logger.exception("consultation chat stream failed: session_id=%s", session_id)
+            error_payload = {
+                "error_code": "LLM_UNAVAILABLE",
+                "message": "잠시 후 다시 시도해주세요",
+            }
+
+        assistant_message = await _persist_assistant_turn(
+            db, conversation_id, ChatMode.NORMAL, "".join(answer_parts), applied_actions
+        )
+
+        if error_payload is not None:
+            yield _sse("error", error_payload)
+            return
+
+        yield _sse(
+            "done",
+            {
+                "message_id": str(assistant_message.id) if assistant_message else None,
+                "applied_actions": applied_actions,
+            },
+        )
+
+        await db.refresh(session)
+        yield _sse(
+            "signal",
+            {
+                "ready": session.status == ConsultationStatus.READY.value,
+                "full_replan_confirmed": session.full_replan_confirmed_at is not None,
             },
         )

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_consultation_satisfied
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.recommendation import Recommendation
@@ -22,7 +22,11 @@ from app.schemas.recommendation import (
 from app.schemas.records import ListResponse
 from app.services import recommendation_service, record_service
 
-router = APIRouter(prefix="/recommendations", tags=["recommendations"])
+router = APIRouter(
+    prefix="/recommendations",
+    tags=["recommendations"],
+    dependencies=[Depends(require_consultation_satisfied)],
+)
 
 
 class RecommendationFilters(BaseModel):

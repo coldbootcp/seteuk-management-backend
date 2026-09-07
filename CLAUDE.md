@@ -185,6 +185,49 @@ docs/
   세특은 학기 구분이 없으므로 파서가 지어내지 않고 비워 두고, 검토 화면에서 학생이 고른
   값을 `period_overrides`로 받는다.
 
+- [x] **진단+상담 필수 관문** — "진단을 마치지 않으면 서비스를 못 쓰게 하고, 그 진단이
+  상담 챗봇과의 대화를 거쳐 3개년 큰 계획을 만들며, 그 큰 계획이 현재 학기 목표를,
+  현재 학기 목표가 10개 탐구 주제를 정한다"는 사용자 요구에 따라 온보딩~메인 화면
+  진입 구조를 재설계함. 새 테이블 `consultation_sessions`(kind: initial/semester_review,
+  status: in_progress/ready/concluded, draft_plan JSONB — 확정 전 초안, ready_at/
+  full_replan_confirmed_at)와 `conversations.purpose` 컬럼(general/
+  initial_consultation/semester_review_consultation) 추가. **새 병렬 계획 저장소를
+  만들지 않고 기존 `roadmap_nodes`/`roadmap_plan_events`/`reconcile_activity`를
+  "큰 계획" 저장소로 그대로 재사용** — 다만 지금까지 하드코딩 템플릿(`suggested_topics`,
+  LLM 미사용)이던 마디 목표·10개 제안을 상담에서 나온 내용으로 대체함. 상담 챗봇은
+  새 엔진이 아니라 기존 SSE 챗봇의 세 번째 대화 유형(`chat_service.stream_consultation_reply`,
+  `chat/consultation_tools.py`의 `propose_draft_plan`/`propose_full_replan_exception`/
+  `signal_ready_to_conclude`)이다. **확정은 도구 호출의 부수효과가 아니라 오직
+  `POST /consultation/sessions/{id}/conclude` 호출로만** 일어난다(버튼을 누르기 전까지는
+  초안일 뿐) — 챗봇이 `signal_ready_to_conclude`를 불러야 나가기 버튼이 활성화되고,
+  대화가 이어지면(매 턴 재평가) 활성화가 취소된다. 재평가 상담이 3개년 계획 전체를
+  다시 세우려면 `propose_full_replan_exception`으로 제안한 뒤 학생이 별도 확인
+  엔드포인트(`confirm-full-replan`)로 명시 동의해야 하며, 이 강제는 프롬프트가 아니라
+  도구 핸들러가 함(`full_replan_confirmed_at is None`이면 거부).
+  관문(`require_consultation_satisfied`)은 `has_completed_diagnosis_before`와 같은
+  "존재 조회" 방식(User에 boolean 플래그 없음)이고, `roadmaps`/`plans`/`recommendations`/
+  일반 대화(`conversations`)에만 건다. **6개 탭 CRUD(`record_routers`)와 첨부파일은
+  의도적으로 게이트 밖에 둔다** — 최초 진단 자체가 이 데이터(생기부 파싱 결과 등)를
+  읽어야 하므로, 여기를 막으면 신규 사용자가 온보딩~진단까지 갈 방법이 없어진다.
+  "현재 학기"가 학생의 자체 선언(`User.current_grade/semester`)이고 이를 바꾸는
+  스케줄러가 원래 없다는 기존 설계를 그대로 이용해, 학생이 학기를 올리는 순간 새
+  학기에 대한 `concluded` 세션이 없다는 사실만으로 관문이 저절로 다시 잠긴다(별도
+  "학기 종료 감지" 로직 불필요). 온보딩(`POST /api/onboarding`)에서 로드맵을
+  템플릿으로 자동 생성·확정하던 마지막 단계는 제거함 — 이제 3개년 계획은 오직
+  초진단 상담의 확정으로만 생긴다. **실제 DeepSeek 키로 전 구간 검증 완료**: 진단
+  보고서 표시 → 상담(학생이 진로를 반도체공학→데이터 분석/머신러닝으로 정정하자
+  챗봇이 즉시 따라가며 되묻고, 자료가 충분하다고 판단되자 확정 제안 → 학생 확인 →
+  `signal_ready_to_conclude` → 나가기 버튼 활성화 → 확정 → 실제 `roadmap_nodes`
+  6개(과거 학기는 회고, 현재 학기는 상담 내용 그대로, 10개 제안 포함)가 생성되고
+  메인 화면이 정상적으로 열리는 것까지 실제 계정으로 확인. **알려진 한계**: (1)
+  상담 대화가 `Conversation.purpose`로 구분은 되지만 일반 챗봇 탭의 대화 목록에서
+  걸러지지 않고 함께 보인다(화면단 필터 미구현). (2) `_update_basics`(일반 챗봇의
+  `update_profile_basics` 도구)가 `current_grade`/`current_semester`를 여전히
+  직접 바꿀 수 있어, 잡담 중에 학기가 바뀌어 관문이 재잠기는 경로가 이론상 남아있다
+  — 관문 자체는 조회 기반이라 정확히 다시 잠기지만, 이 도구에서 그 인자를 없앨지는
+  제품 판단으로 남김. (3) 챗봇의 마크다운 응답(표·굵게 등)이 채팅 말풍선에 원문
+  그대로 찍힌다(렌더러 없음) — 기존 일반 챗봇 화면도 같은 한계.
+
 ## 알려진 한계 / 다음에 손볼 것
 
 - **비동기 job이 FastAPI BackgroundTasks에 묶여 있다.** 파싱·진단이 API 프로세스와 생사를 같이 하므로 배포 때마다 진행 중 job이 죽는다(기동 시 실패 처리로 사용자 경험만 막아둔 상태). 트래픽이 늘면 워커 큐(Celery/ARQ 등)로 분리해야 한다.
