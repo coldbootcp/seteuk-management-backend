@@ -29,6 +29,55 @@ def test_filter_rephrases_six_semester_language_after_first_semester() -> None:
     assert "현재 학기부터 남은 학기" in result
 
 
+def test_filter_rephrases_six_semester_without_counter() -> None:
+    result = filter_consultation_output_for_period(
+        "### 2. 제안하는 6학기 큰 흐름 (안)",
+        target_grade=2,
+        target_semester=2,
+    )
+
+    assert "6학기" not in result
+    assert "현재 학기부터 남은 학기" in result
+
+
+def test_filter_removes_repeated_direction_motivation_question() -> None:
+    result = filter_consultation_output_for_period(
+        "반도체공학 진로를 처음 정하게 된 계기나 특히 마음에 남는 경험이 있나요?\n"
+        "이번 학기에는 소자 물리 주제를 우선 검토해 보세요.",
+        target_grade=2,
+        target_semester=2,
+        has_declared_direction=True,
+    )
+
+    assert "계기" not in result
+    assert "이번 학기" in result
+
+
+def test_filter_removes_method_preference_question_but_keeps_topic_choice() -> None:
+    result = filter_consultation_output_for_period(
+        "이 중에서 끌리는 주제가 있나요? 아니면 시뮬레이션 도구를 활용한 탐구보다는 "
+        "이론·개념 정리형 접근을 더 선호하시는 편인지 알려주시면, 그 방향에 맞춰 "
+        "이번 학기 탐구 계획을 구체화해볼게요.",
+        target_grade=2,
+        target_semester=2,
+    )
+
+    assert "끌리는 주제" in result
+    assert "시뮬레이션" not in result
+
+
+def test_filter_does_not_assume_a_specific_current_course() -> None:
+    result = filter_consultation_output_for_period(
+        "물리Ⅱ 수업 내용과 연결해 탐구해 보세요.",
+        target_grade=2,
+        target_semester=2,
+        has_current_course_data=False,
+    )
+
+    assert "물리Ⅱ" not in result
+    assert "실제 수강 중인 관련 과목" in result
+
+
 def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
     result = filter_consultation_output_for_period(
         "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"

@@ -52,7 +52,7 @@ TITLE_LIMIT = 60
 
 _GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
 _SIX_SEMESTER_LANGUAGE = re.compile(
-    r"(?:앞으로\s*)?6개\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획))?"
+    r"(?:앞으로\s*)?6(?:개)?\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획|구성))?"
 )
 _UNVERIFIED_RECORD_ABSENCE = re.compile(
     r"(?:학생부|생기부|활동|성적|독서|수상|봉사|저장된\s*(?:과거\s*)?기록).{0,80}"
@@ -65,6 +65,21 @@ _RECORD_COVERAGE_UNAVAILABLE = {
     "failed",
     "awaiting_import",
 }
+_DIRECTION_REASK = re.compile(
+    r"(?:진로|분야).{0,35}(?:정하게\s*된\s*계기|선택한\s*이유|처음\s*정한\s*계기)"
+    r"|(?:왜|어떤\s*계기).{0,35}(?:진로|분야)"
+    r"|(?:어느|어떤)\s*세부\s*(?:영역|분야).{0,25}(?:관심|끌리)",
+    re.IGNORECASE,
+)
+_METHOD_PREFERENCE_REASK = re.compile(
+    r"(?:아니면\s*)?(?:시뮬레이션|실험|발표|보고서|이론|개념\s*정리).{0,90}"
+    r"(?:선호하(?:시)?는|원하(?:시)?는|방식(?:을|이)|형식(?:을|이)).{0,90}"
+    r"(?:알려|말해|답해|선택해).{0,90}(?:\.|\?|$)",
+    re.IGNORECASE,
+)
+_UNVERIFIED_SPECIFIC_COURSE = re.compile(
+    r"(?:국어|영어|수학|물리(?:학)?|화학|생명과학|지구과학|통합과학|정보)\s*[ⅠⅡIVX0-9]+"
+)
 
 
 def _period_index(grade: int, semester: int) -> int:
@@ -77,6 +92,8 @@ def filter_consultation_output_for_period(
     target_grade: int,
     target_semester: int,
     school_record_status: str = "imported",
+    has_declared_direction: bool = False,
+    has_current_course_data: bool = True,
 ) -> str:
     """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
 
@@ -99,6 +116,23 @@ def filter_consultation_output_for_period(
     filtered = "\n".join(kept)
     if current > 0:
         filtered = _SIX_SEMESTER_LANGUAGE.sub("현재 학기부터 남은 학기", filtered)
+
+    # 이미 저장된 진로·학과·관심 축을 모델이 다시 질문한 실제 응답을 막는다.
+    # 이 필터는 방향이 전혀 없는 학생의 필요한 탐색 질문은 지우지 않는다.
+    if has_declared_direction:
+        filtered = "\n".join(
+            line for line in filtered.splitlines() if not _DIRECTION_REASK.search(line)
+        )
+
+    # 결과물·수행 방식은 학교에 실제 기회가 생긴 뒤 학생이 정할 사항이다. 모델이
+    # 주제 제안 직후 이를 사전 설문처럼 되묻는 문장을 제거한다.
+    filtered = _METHOD_PREFERENCE_REASK.sub("", filtered)
+
+    # 수강 과목이 아직 등록되지 않았는데 특정 교과를 실제 수강 중인 것처럼
+    # 연결한 실제 응답을 막는다. 주제 설명은 보존하고, 확인되지 않은 과목명만
+    # 중립적인 표현으로 바꾼다.
+    if not has_current_course_data:
+        filtered = _UNVERIFIED_SPECIFIC_COURSE.sub("실제 수강 중인 관련 과목", filtered)
 
     # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
     # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를
@@ -479,6 +513,16 @@ async def stream_consultation_reply(
                     target_grade=session.target_grade,
                     target_semester=session.target_semester,
                     school_record_status=context["school_record_coverage"]["status"],
+                    has_declared_direction=bool(
+                        (context.get("memory", {}).get("career_goal") or {}).get("goal")
+                        or context.get("memory", {}).get("target_department")
+                        or context.get("memory", {}).get("interest_keywords")
+                    ),
+                    has_current_course_data=any(
+                        record.get("grade") == session.target_grade
+                        and record.get("semester") == session.target_semester
+                        for record in context.get("academic_performance", [])
+                    ),
                 )
                 if visible_text:
                     if answer_parts:
