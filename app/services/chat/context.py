@@ -19,6 +19,7 @@ from app.models.award import Award
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemStatus
 from app.models.reading_activity import ReadingActivity
+from app.models.seteuk_upload import SeteukUpload, UploadStatus
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.services.academic_timing import get_academic_timing
@@ -46,8 +47,69 @@ async def _count(db: AsyncSession, model: Any, user_id: uuid.UUID) -> int:
     ) or 0
 
 
+async def _build_school_record_coverage(
+    db: AsyncSession, user_id: uuid.UUID
+) -> dict[str, Any]:
+    """학생부 PDF가 없는 상태와, 학생부에서 읽은 기록이 없는 상태를 구분한다.
+
+    활동 행이 0건이라는 사실만으로는 학생이 활동을 하지 않았다는 결론을 낼 수 없다.
+    PDF를 올리지 않았거나 파싱·반영을 끝내지 않은 경우에는 챗봇이 '없다'가 아니라
+    '확인할 수 없다'고 말할 수 있게 이 상태를 별도로 전달한다.
+    """
+    uploads = list(
+        await db.scalars(
+            select(SeteukUpload)
+            .where(SeteukUpload.user_id == user_id)
+            .order_by(SeteukUpload.created_at.desc())
+        )
+    )
+    if not uploads:
+        return {
+            "status": "not_uploaded",
+            "summary": (
+                "학생부 PDF가 아직 업로드되지 않았습니다. 저장된 활동이 없더라도 "
+                "이전 활동이 없었다고 판단할 수 없습니다."
+            ),
+        }
+
+    latest = uploads[0]
+    if latest.status == UploadStatus.PROCESSING.value:
+        return {
+            "status": "processing",
+            "summary": (
+                "가장 최근 학생부 PDF를 처리 중입니다. 이전 활동의 존재 여부를 "
+                "확정적으로 말할 수 없습니다."
+            ),
+        }
+    if latest.status == UploadStatus.FAILED.value:
+        return {
+            "status": "failed",
+            "summary": (
+                "가장 최근 학생부 PDF 처리에 실패했습니다. 저장된 활동이 없더라도 "
+                "이전 활동이 없었다고 판단할 수 없습니다."
+            ),
+        }
+    if latest.imported_at is None:
+        return {
+            "status": "awaiting_import",
+            "summary": (
+                "학생부 PDF는 읽었지만 학생이 아직 파싱 결과를 기록에 반영하지 "
+                "않았습니다. 이전 활동의 존재 여부를 확정적으로 말할 수 없습니다."
+            ),
+        }
+
+    return {
+        "status": "imported",
+        "summary": (
+            "학생부 PDF의 파싱 결과가 기록에 반영되었습니다. 다만 특정 주제의 "
+            "기록 부재는 '학생부에서 해당 근거를 찾지 못함'으로만 표현해야 합니다."
+        ),
+    }
+
+
 async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
     interests = await get_current_interests(db, user.id)
+    school_record_coverage = await _build_school_record_coverage(db, user.id)
 
     activities = list(
         await db.scalars(
@@ -141,6 +203,9 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
         },
         # 학생이 직접 말해준 것들 — 챗봇이 '수정' 모드에서 갱신하는 장기 메모리.
         "memory": interests,
+        # 활동·성적 등의 빈 배열을 모델이 '실제 활동이 전혀 없었다'고 오해하지
+        # 않도록, 학생부 업로드·반영 상태를 별도 사실로 제공한다.
+        "school_record_coverage": school_record_coverage,
         "diagnosis": (
             {
                 "strengths": diagnosis.strengths,

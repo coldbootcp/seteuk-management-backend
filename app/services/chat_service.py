@@ -54,6 +54,17 @@ _GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
 _SIX_SEMESTER_LANGUAGE = re.compile(
     r"(?:앞으로\s*)?6개\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획))?"
 )
+_UNVERIFIED_RECORD_ABSENCE = re.compile(
+    r"(?:학생부|생기부|활동|성적|독서|수상|봉사|저장된\s*(?:과거\s*)?기록).{0,80}"
+    r"(?:전혀\s*)?(?:기록되지\s*않|하나도\s*없|없(?:습니다|어요|다)|확인되지\s*않)",
+    re.IGNORECASE,
+)
+_RECORD_COVERAGE_UNAVAILABLE = {
+    "not_uploaded",
+    "processing",
+    "failed",
+    "awaiting_import",
+}
 
 
 def _period_index(grade: int, semester: int) -> int:
@@ -61,7 +72,11 @@ def _period_index(grade: int, semester: int) -> int:
 
 
 def filter_consultation_output_for_period(
-    text: str, *, target_grade: int, target_semester: int
+    text: str,
+    *,
+    target_grade: int,
+    target_semester: int,
+    school_record_status: str = "imported",
 ) -> str:
     """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
 
@@ -84,6 +99,20 @@ def filter_consultation_output_for_period(
     filtered = "\n".join(kept)
     if current > 0:
         filtered = _SIX_SEMESTER_LANGUAGE.sub("현재 학기부터 남은 학기", filtered)
+
+    # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
+    # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를
+    # 제거하고, 확인 범위를 명시한 사실 문장으로 한 번만 바꾼다.
+    if school_record_status in _RECORD_COVERAGE_UNAVAILABLE:
+        lines = filtered.splitlines()
+        kept_lines = [line for line in lines if not _UNVERIFIED_RECORD_ABSENCE.search(line)]
+        if len(kept_lines) != len(lines):
+            filtered = (
+                "학생부가 아직 반영되지 않아 이전 활동의 존재 여부는 확인할 수 없습니다. "
+                "현재 저장된 기록이 비어 있다는 사실만으로 활동이 없었다고 판단하지 않습니다.\n\n"
+                + "\n".join(kept_lines)
+            )
+
     return re.sub(r"\n{3,}", "\n\n", filtered).strip()
 
 
@@ -449,6 +478,7 @@ async def stream_consultation_reply(
                     raw_text,
                     target_grade=session.target_grade,
                     target_semester=session.target_semester,
+                    school_record_status=context["school_record_coverage"]["status"],
                 )
                 if visible_text:
                     if answer_parts:

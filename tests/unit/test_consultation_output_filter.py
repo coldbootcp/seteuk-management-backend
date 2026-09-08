@@ -27,3 +27,17 @@ def test_filter_rephrases_six_semester_language_after_first_semester() -> None:
 
     assert "6개 학기" not in result
     assert "현재 학기부터 남은 학기" in result
+
+
+def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
+    result = filter_consultation_output_for_period(
+        "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
+        "현재 학기에는 소자 물리 주제를 우선 검토해 보세요.",
+        target_grade=2,
+        target_semester=2,
+        school_record_status="not_uploaded",
+    )
+
+    assert "전혀 기록되지" not in result
+    assert "확인할 수 없습니다" in result
+    assert "현재 학기" in result
