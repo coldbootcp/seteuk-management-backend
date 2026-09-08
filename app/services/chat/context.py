@@ -23,6 +23,7 @@ from app.models.seteuk_upload import SeteukUpload, UploadStatus
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.services.academic_timing import get_academic_timing
+from app.services.diagnosis.data import has_diagnosis_evidence
 from app.services.student_interest_service import get_current_interests
 
 MAX_ACTIVITIES = 80
@@ -110,6 +111,7 @@ async def _build_school_record_coverage(
 async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
     interests = await get_current_interests(db, user.id)
     school_record_coverage = await _build_school_record_coverage(db, user.id)
+    diagnosis_has_evidence = await has_diagnosis_evidence(db, user.id)
 
     activities = list(
         await db.scalars(
@@ -179,12 +181,14 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .limit(MAX_PLANS)
         )
     )
-    diagnosis = await db.scalar(
-        select(Diagnosis)
-        .where(Diagnosis.user_id == user.id, Diagnosis.status == DiagnosisStatus.DONE.value)
-        .order_by(Diagnosis.created_at.desc())
-        .limit(1)
-    )
+    diagnosis = None
+    if diagnosis_has_evidence:
+        diagnosis = await db.scalar(
+            select(Diagnosis)
+            .where(Diagnosis.user_id == user.id, Diagnosis.status == DiagnosisStatus.DONE.value)
+            .order_by(Diagnosis.created_at.desc())
+            .limit(1)
+        )
 
     return {
         "student": {

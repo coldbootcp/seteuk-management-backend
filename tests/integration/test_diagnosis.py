@@ -117,6 +117,31 @@ async def test_pre_questions_are_disabled_before_first_diagnosis(
     assert response.json() == {"questions": []}
 
 
+async def test_empty_record_diagnosis_never_invents_a_report(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_llm(*args: object, **kwargs: object) -> None:
+        raise AssertionError("빈 기록으로 LLM 진단을 호출하면 안 됩니다")
+
+    monkeypatch.setattr(pipeline, "call_structured", _unexpected_llm)
+
+    create_response = await client.post("/api/v1/diagnosis", headers=auth_headers)
+    assert create_response.status_code == 201
+    diagnosis_id = create_response.json()["diagnosis_id"]
+
+    body = (
+        await client.get(f"/api/v1/diagnosis/{diagnosis_id}", headers=auth_headers)
+    ).json()
+    assert body["status"] == "done"
+    assert body["strengths"] == []
+    assert body["weaknesses"] == []
+    assert body["opportunities"] == []
+    assert body["threats"] == []
+    assert body["headline_comment"] is None
+
+
 async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     # 성적 추이 섹션은 LLM 없이 원자료를 그대로 재구성하므로, 실제로 그렇게
     # 동작하는지 확인하려면 academic_performance가 있어야 한다. 등급이 매겨진 과목
@@ -242,8 +267,11 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
 async def test_diagnosis_works_without_any_seteuk_data(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    """생기부를 아예 안 올린 사용자도 진단이 실패하지 않아야 한다 — 종합 평가는
-    학기별 평가/진로 사슬/활동 인벤토리가 비어 있어도 예외 없이 호출된다."""
+    """생기부·직접 입력 기록이 없는 사용자는 빈 진단으로 정상 완료된다.
+
+    과거에는 이 경로가 빈 입력으로 종합 평가 LLM을 호출해, 존재하지 않는 학년·활동
+    ·약점을 지어냈다. 상담은 이어갈 수 있지만 과거 이력 진단은 비워야 한다.
+    """
     create_response = await client.post("/api/v1/diagnosis", headers=auth_headers)
     diagnosis_id = create_response.json()["diagnosis_id"]
 
@@ -254,7 +282,11 @@ async def test_diagnosis_works_without_any_seteuk_data(
     assert body["grades_trend"] == {"overall": []}
     assert body["activity_inventory"] == []
     assert body["knowledge_graph_links"] == []
-    assert body["strengths"] == ["강점1"]
+    assert body["strengths"] == []
+    assert body["weaknesses"] == []
+    assert body["opportunities"] == []
+    assert body["threats"] == []
+    assert body["headline_comment"] is None
 
 
 async def test_pre_questions_empty_after_first_diagnosis(

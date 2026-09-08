@@ -106,8 +106,16 @@ async def get_latest_diagnosis(db: AsyncSession, user_id: uuid.UUID) -> Diagnosi
     return diagnosis
 
 
-def to_result(diagnosis: Diagnosis) -> DiagnosisResult:
+def to_result(diagnosis: Diagnosis, *, has_evidence: bool = True) -> DiagnosisResult:
     """상태와 무관하게 항상 반환 — processing/failed면 결과 필드가 비어있을 뿐."""
+    # 코드 수정 전에 빈 입력으로 만들어진 진단도 있다. 새 진단을 다시 실행하지
+    # 않았더라도, 실제 근거가 없는 사용자는 그 과거의 환각 결과를 보지 않게 한다.
+    if not has_evidence:
+        return DiagnosisResult(
+            diagnosis_id=diagnosis.id,
+            status=diagnosis.status,
+            grades_trend=diagnosis.grades_trend,
+        )
     return DiagnosisResult(
         diagnosis_id=diagnosis.id,
         status=diagnosis.status,

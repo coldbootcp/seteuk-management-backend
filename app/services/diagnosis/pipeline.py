@@ -31,6 +31,7 @@ from app.services.diagnosis.data import (
     get_activities_by_grade,
     get_career_thread_material,
     get_semester_groups,
+    has_diagnosis_evidence,
 )
 from app.services.diagnosis.prompts import (
     ACTIVITY_INVENTORY_SYSTEM_PROMPT,
@@ -387,6 +388,26 @@ async def run_diagnosis_pipeline(
     OverallAssessmentDraft,
 ]:
     user = await db.get(User, user_id)
+
+    # 학생부를 올리지 않았고 직접 입력한 이전 기록도 없으면 정밀 진단의 근거가
+    # 없다. 이 경우 빈 payload를 DeepSeek에 보내면 실제로 "9학년 게임 개발
+    # 동아리" 같은 사실을 만들어 SWOT를 채우는 문제가 있었다. 상담은 진로 희망을
+    # 출발점으로 계속할 수 있지만, 과거 기록 분석은 비워 두는 것이 정직하다.
+    if not await has_diagnosis_evidence(db, user_id):
+        return (
+            GradesTrend(overall=[]),
+            [],
+            [],
+            [],
+            [],
+            OverallAssessmentDraft(
+                strengths=[],
+                weaknesses=[],
+                opportunities=[],
+                threats=[],
+                headline_comment="",
+            ),
+        )
 
     # AsyncSession은 동시 사용을 지원하지 않으므로, db를 직접 건드리는 조회는
     # 전부 먼저 순차적으로 끝낸다. LLM 호출만 아래에서 병렬로 돌린다.
