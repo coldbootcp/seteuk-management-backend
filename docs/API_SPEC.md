@@ -69,6 +69,15 @@
 | `conversations` | id, user_id, title, created_at, updated_at | |
 | `messages` | id, conversation_id, role, content, mode, applied_actions(JSONB) | |
 | `usage_events` | id, user_id, action, created_at | 사용량 한도 카운터 |
+| `universities` | id, official_code, name, campus_name, region, source_url, verified_at | 입학연도와 분리된 공식 대학 기준정보 |
+| `admission_programs` | id, university_id, admission_year, source_program_code, name, college_name, source_url, source_status, verified_at | 입학연도별 모집단위 |
+| `admission_tracks` | id, program_id, name, admission_type, recruitment_period, has_document_review, has_interview, has_minimum_requirement, source_url, source_status, verified_at | 모집단위별 실제 전형 |
+| `admission_university_snapshots` | university_id, source_admission_year, payload(JSONB), source_url, verified_at | 대학 단위 공개 통계 시계열 |
+| `admission_university_guides` | university_id, source_admission_year, sections(JSONB), source_url, verified_at | 대학 공통 수시·정시 특징과 입시가이드 |
+| `admission_program_references` | university_id, source_admission_year, source_reference_code, name, detail_sections(JSONB), source_url, verified_at | 과거 공개 학과 소개·모집 요약 |
+| `admission_program_outcomes` | program_reference_id, selection_name, competition_rate, metrics(JSONB), source_url, verified_at | 학과·전형별 공개 입시결과 |
+| `application_preparations` | id, user_id, university_id, program_id, track_id, admission_year, central_question, narrative_outline | 지원처별 자소서 설계 |
+| `application_evidences` | id, preparation_id, activity_id, narrative_role, order_index, student_note | 설계에 쓸 실제 활동 근거 |
 
 ### 2.3 enum
 
@@ -213,6 +222,63 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 지금까지 채운 값을 보고 아직 비었거나 막연한 부분만 묻는다(최대 4개). 각 질문은
 `{ key, label, question, why, selection_mode, options }`이며, `why`는 학생이 답할
 이유를 알려 주기 위한 것이다. 보기는 학생의 진로에 맞춰 생성된다.
+
+### 3.3a 지원처 카탈로그
+
+자소서·면접 준비에서 쓰는 공용 기준 데이터다. 학생의 성적이나 활동으로 적합도를
+판정하지 않으며, 선택을 돕기 위해 `대학 → 모집단위 → 전형` 순서로만 제공한다.
+모든 응답은 공식 출처 링크와 최종 확인 시각을 함께 돌려준다. `source_status`는
+`plan`(시행계획) 또는 `final`(최종 모집요강)이다.
+
+대학 목록은 대입정보포털의 **일반대학** 경로(전문대학 경로와 분리됨)에서 관리한다.
+모집단위와 전형은 선택 시 공식 포털에서 해당 대학·모집단위만 갱신해 저장한다. 포털
+접속이 일시적으로 실패해도 기존 카탈로그는 삭제하지 않으며, 새로 확인하지 못한
+자료를 `final`로 표시하지 않는다.
+
+**GET /admission-catalog/universities?q=서&limit=12** → 대학 자동완성 목록
+
+**GET /admission-catalog/universities/{university_id}/programs?admission_year=2027&q=반도체**
+→ 해당 대학·입학연도의 모집단위 목록
+
+**GET /admission-catalog/programs/{program_id}/tracks** → 해당 모집단위의 전형 목록
+(`admission_type`, `recruitment_period`, 서류·면접·수능최저 여부 포함)
+
+**GET /admission-catalog/universities/{university_id}/statistics?source_admission_year=2026**
+→ 대학 전체의 모집·지원 규모, 전형유형 분포, 취업률, 수시·정시 경쟁률 시계열.
+모집단위별 결과와 혼동하지 않도록 별도 응답으로 둔다.
+
+**GET /admission-catalog/universities/{university_id}/admission-guide?source_admission_year=2027**
+→ 해당 학년도 또는 그 이전의 가장 최근 공개 대학 공통 가이드. 수시·정시 대입특징과
+입시가이드의 문단 및 표 구조를 출처·기준 학년도와 함께 반환한다. 최신 자료에 특정
+탭이 빠져 있으면 그 탭만 이전 공개본으로 보완하며, `sections[].source_admission_year`와
+`sections[].source_url`로 탭별 기준을 명시한다.
+
+**GET /admission-catalog/tracks/{track_id}/past-results** → 현재 모집단위의 이름과 정확히
+대응하는 가장 최신 과거 공개 입시결과. 경쟁률·충원·성적 지표의 원래 열을 보존하며,
+과거 결과를 합격 가능성 또는 단일 커트라인으로 판정하지 않는다.
+
+**GET /admission-catalog/tracks/{track_id}/program-profile** → 현재 모집단위의 이름과
+정확히 대응하는 과거 공개 학과 소개(교육목표·교육과정·진로취업분야). 이름이 다른
+모집단위에 유사도 추정을 적용하지 않는다.
+
+**GET /admission-catalog/tracks/{track_id}/writing-requirements** → 전형별 자소서
+요구 여부와 확인된 문항. 응답의 `status.requirement_status`는 `required`,
+`not_required`, `unverified` 중 하나다. 빈 `requirements`만으로 미요구를 뜻하지
+않으며, 원문 판독·전형 범위 대조가 끝나기 전에는 반드시 `unverified`로 돌려준다.
+원문 학년도(`source_admission_year`)와 공식 파일 링크(`source_url`)도 함께 돌려
+과거 자료를 참고로 쓸 때 사용자가 혼동하지 않게 한다.
+
+### 3.3b 자소서 설계
+
+초안을 만들기 전, 학생의 실제 활동만 근거로 `3년 활동 흐름 → 중심 질문 → 한 편의
+글 구조`를 저장한다. 이 API는 대학 합격 가능성이나 전형 적합도를 판정하지 않는다.
+
+**GET /application-preparations/activity-flows** → 진단에서 묶인 활동 흐름과 활동별
+기록 충실도(설명·성찰·첨부자료)를 반환한다.
+
+**POST /application-preparations** → 대학·모집단위·전형을 가진 지원처 설계 생성
+
+**PUT /application-preparations/{id}** → 중심 질문·글 구조·선택 근거 활동 저장
 
 ### 3.4 진단 (기능1)
 
