@@ -20,9 +20,7 @@ from app.schemas.diagnosis import (
     KnowledgeGraphDraft,
     KnowledgeGraphLink,
     OverallAssessmentDraft,
-    PreQuestion,
     PreQuestionAnswer,
-    PreQuestionsResponse,
     SemesterReview,
     SemesterReviewDraft,
 )
@@ -40,7 +38,6 @@ from app.services.diagnosis.prompts import (
     INTEREST_EXTRACTION_SYSTEM_PROMPT,
     KNOWLEDGE_GRAPH_SYSTEM_PROMPT,
     OVERALL_ASSESSMENT_SYSTEM_PROMPT,
-    PRE_QUESTION_SYSTEM_PROMPT,
     SEMESTER_REVIEW_SYSTEM_PROMPT,
 )
 from app.services.llm import call_structured
@@ -53,18 +50,6 @@ _KNOWLEDGE_GRAPH_DESCRIPTION_LIMIT = 200
 _KNOWLEDGE_GRAPH_BATCH_THRESHOLD = 120
 # 이만큼 활동이 있는데 링크가 0건이면 응답 편차로 보고 한 번 더 묻는다.
 _KNOWLEDGE_GRAPH_MIN_FOR_RETRY = 20
-
-
-async def generate_pre_questions(
-    interests: dict[str, Any], seteuk_summary: dict[str, Any]
-) -> list[PreQuestion]:
-    user_content = json.dumps(
-        {"current_interests": interests, "seteuk_summary": seteuk_summary}, ensure_ascii=False
-    )
-    result = await call_structured(
-        PRE_QUESTION_SYSTEM_PROMPT, user_content, PreQuestionsResponse
-    )
-    return result.questions[:5]
 
 
 async def extract_interests_from_answers(

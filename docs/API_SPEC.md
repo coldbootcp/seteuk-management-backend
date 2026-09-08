@@ -315,15 +315,15 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 ### 3.4 진단 (기능1)
 
 **GET /diagnosis/pre-questions** → 200 `{ questions: [...] }`
-최초 진단 전에만 동작한다(재진단이면 빈 배열). 생기부와 현재 답변의 갭을 보고 최대
-5개 질문을 만든다.
+호환성을 위해 남아 있는 엔드포인트이며 항상 빈 배열을 반환한다. 별도 진단 전 설문은
+제거했다. 진단은 이미 가진 학생부·성적·활동 데이터로 먼저 실행하고, 계획에 실제로
+영향을 주는 확인만 상담 챗봇이 날짜·학기 문맥을 근거로 한 번에 하나씩 다룬다.
 
 **POST /diagnosis/pre-questions/answers** → 204
 ```json
 { "answers": [{ "key": "string", "prompt": "string", "answer": "string 또는 null" }] }
 ```
-답변을 대화처럼 취급해 LLM 추출을 거친 뒤, durable하다고 판단된 것만
-`student_interests`에 반영한다.
+이전 클라이언트와의 호환용이다. 현재 웹 화면은 이 엔드포인트를 호출하지 않는다.
 
 **POST /diagnosis** → 201 `{ diagnosis_id, status }` — 비동기 job.
 

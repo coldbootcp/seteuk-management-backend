@@ -11,6 +11,7 @@ tools.py에 삭제 도구를 두지 않아 대화만으로 기록이 사라지�
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -48,6 +49,42 @@ HISTORY_LIMIT = 20
 # 도구 호출 → 결과 → 다시 호출을 몇 번까지 허용할지. 무한 루프 방지용.
 MAX_TOOL_ROUNDS = 4
 TITLE_LIMIT = 60
+
+_GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
+_SIX_SEMESTER_LANGUAGE = re.compile(
+    r"(?:앞으로\s*)?6개\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획))?"
+)
+
+
+def _period_index(grade: int, semester: int) -> int:
+    return (grade - 1) * 2 + (semester - 1)
+
+
+def filter_consultation_output_for_period(
+    text: str, *, target_grade: int, target_semester: int
+) -> str:
+    """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
+
+    DeepSeek가 프롬프트의 '과거는 회고' 규칙을 무시한 실제 응답이 있었기 때문에,
+    학생에게 보내기 직전에 다시 검사한다. 한 줄에 과거 학기가 들어 있으면 통째로
+    버린다. 과거·현재를 한 줄에 섞어 버린 모델 문장을 보존하는 것보다, 현재와 미래
+    계획만 남기는 편이 안전하다.
+    """
+    current = _period_index(target_grade, target_semester)
+    kept: list[str] = []
+    for line in text.splitlines():
+        periods = _GRADE_PERIOD.findall(line)
+        mentions_past = any(
+            _period_index(int(grade), int(semester or "1")) < current
+            for grade, semester in periods
+        )
+        if not mentions_past:
+            kept.append(line)
+
+    filtered = "\n".join(kept)
+    if current > 0:
+        filtered = _SIX_SEMESTER_LANGUAGE.sub("현재 학기부터 남은 학기", filtered)
+    return re.sub(r"\n{3,}", "\n\n", filtered).strip()
 
 
 async def create_conversation(db: AsyncSession, user_id: uuid.UUID) -> Conversation:
@@ -403,22 +440,31 @@ async def stream_consultation_reply(
                         continue
                     delta = chunk.choices[0].delta
                     if delta.content:
-                        if not round_text and answer_parts:
-                            answer_parts.append("\n\n")
-                            yield _sse("token", {"delta": "\n\n"})
                         round_text.append(delta.content)
-                        yield _sse("token", {"delta": delta.content})
                     if delta.tool_calls:
                         _merge_tool_call_deltas(tool_calls, delta.tool_calls)
 
-                answer_parts.extend(round_text)
+                raw_text = "".join(round_text)
+                visible_text = filter_consultation_output_for_period(
+                    raw_text,
+                    target_grade=session.target_grade,
+                    target_semester=session.target_semester,
+                )
+                if visible_text:
+                    if answer_parts:
+                        answer_parts.append("\n\n")
+                        yield _sse("token", {"delta": "\n\n"})
+                    answer_parts.append(visible_text)
+                    yield _sse("token", {"delta": visible_text})
                 if not tool_calls:
                     break
 
                 llm_messages.append(
                     {
                         "role": "assistant",
-                        "content": "".join(round_text) or None,
+                        # 모델의 다음 도구 호출 문맥은 원문을 보존한다. 화면·저장용
+                        # 문장만 학기 규칙 필터를 거친다.
+                        "content": raw_text or None,
                         "tool_calls": [
                             {
                                 "id": call["id"],

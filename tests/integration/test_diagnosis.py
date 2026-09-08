@@ -15,8 +15,6 @@ from app.schemas.diagnosis import (
     ExtractedInterestsResult,
     KnowledgeGraphDraft,
     OverallAssessmentDraft,
-    PreQuestion,
-    PreQuestionsResponse,
     SemesterReviewDraft,
 )
 from tests.conftest import TestSessionLocal
@@ -45,12 +43,6 @@ FAKE_CAREER_THREAD = CareerThreadDraft(
 
 
 async def _fake_call_structured(system_prompt: str, user_content: str, response_model: type):
-    if response_model is PreQuestionsResponse:
-        return PreQuestionsResponse(
-            questions=[
-                PreQuestion(key="motivation", prompt="이 진로에 관심을 갖게 된 계기는?", options=[])
-            ]
-        )
     if response_model is ExtractedInterestsResult:
         return ExtractedInterestsResult(
             items=[{"field_key": "motivation", "value": "책을 읽고 관심이 생김"}]
@@ -116,15 +108,13 @@ def _patch_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "call_structured", _fake_call_structured)
 
 
-async def test_pre_questions_returns_questions_before_first_diagnosis(
+async def test_pre_questions_are_disabled_before_first_diagnosis(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     response = await client.get("/api/v1/diagnosis/pre-questions", headers=auth_headers)
 
     assert response.status_code == 200
-    questions = response.json()["questions"]
-    assert len(questions) == 1
-    assert questions[0]["key"] == "motivation"
+    assert response.json() == {"questions": []}
 
 
 async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str, str]) -> None:

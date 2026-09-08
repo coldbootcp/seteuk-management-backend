@@ -21,6 +21,7 @@ from app.models.plan_item import PlanItem, PlanItemStatus
 from app.models.reading_activity import ReadingActivity
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
+from app.services.academic_timing import get_academic_timing
 from app.services.student_interest_service import get_current_interests
 
 MAX_ACTIVITIES = 80
@@ -128,6 +129,15 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             "name": user.name,
             "current_grade": user.current_grade,
             "current_semester": user.current_semester,
+            "freshman_academic_year": user.freshman_academic_year,
+            # 이 문맥은 모델의 상식에 맡기지 않는다. 예를 들어 9월의 2학기는
+            # 학기 초이므로 아직 성적·수행 결과를 물을 수 없다는 사실을 서버가
+            # 명시해 준다.
+            "academic_timing": get_academic_timing(
+                freshman_academic_year=user.freshman_academic_year,
+                current_grade=user.current_grade,
+                current_semester=user.current_semester,
+            ),
         },
         # 학생이 직접 말해준 것들 — 챗봇이 '수정' 모드에서 갱신하는 장기 메모리.
         "memory": interests,
