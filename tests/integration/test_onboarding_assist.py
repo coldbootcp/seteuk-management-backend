@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from httpx import AsyncClient
 
@@ -157,3 +159,82 @@ async def test_clarify_marks_itself_complete_when_it_has_nothing_left_to_ask(
         "/api/v1/profile/clarify", json={"career_goal": "연구직"}, headers=auth_headers
     )
     assert response.json()["complete"] is True
+
+
+async def test_clarify_drops_nonessential_and_out_of_scale_questions_for_5_grade_students(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """입학 연도와 맞지 않는 성적 질문은 프롬프트를 어겨도 화면까지 오면 안 된다."""
+
+    async def _bad_questions(system_prompt: str, user_content: str, response_model: type):
+        return ClarifyResponse(
+            questions=[
+                {
+                    "key": "current_grade_level",
+                    "label": "현재 성적 수준",
+                    "question": (
+                        "현재 이수 중인 수학, 물리, 화학 과목에서 "
+                        "어느 정도의 성적을 받고 있나요?"
+                    ),
+                    "why": "학습 수준을 보려 합니다.",
+                    "selection_mode": "single",
+                    "options": ["상위권 (1~2등급)", "중상위권 (3~4등급)", "중위권 (5~6등급)"],
+                },
+                {
+                    "key": "rank_scale_error",
+                    "label": "등급 선택",
+                    "question": "앞으로 지키고 싶은 학습 목표는 무엇인가요?",
+                    "why": "계획을 세우려 합니다.",
+                    "selection_mode": "single",
+                    "options": ["1~2등급", "5~6등급"],
+                },
+                {
+                    "key": "school_programs",
+                    "label": "학교 프로그램",
+                    "question": "이번 학기에 참여할 동아리나 대회가 있나요?",
+                    "why": "활동 계획을 세우려 합니다.",
+                    "selection_mode": "single",
+                    "options": ["동아리", "대회", "아직 없음"],
+                },
+            ]
+        )
+
+    async def _five_grade_policy(*_args, **_kwargs):
+        return SimpleNamespace(rank_grade_scale=5)
+
+    monkeypatch.setattr(profile_service, "call_structured", _bad_questions)
+    monkeypatch.setattr(profile_service, "get_policy_for_freshman_year", _five_grade_policy)
+
+    response = await client.post(
+        "/api/v1/profile/clarify",
+        json={"freshman_academic_year": 2026, "career_goal": "반도체 공학"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"questions": [], "complete": True}
+
+
+async def test_clarify_skips_llm_when_student_already_has_a_direction(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """기본 진로 축을 받은 뒤에는 별도 확인 단계로 되돌아가지 않는다."""
+
+    async def _should_not_call_llm(*_args, **_kwargs):
+        raise AssertionError("진로 축이 충분하면 확인 질문용 LLM을 호출하면 안 된다")
+
+    monkeypatch.setattr(profile_service, "call_structured", _should_not_call_llm)
+
+    response = await client.post(
+        "/api/v1/profile/clarify",
+        json={
+            "freshman_academic_year": 2026,
+            "career_goal": "반도체 공학",
+            "target_department": "반도체공학과",
+            "interest_keywords": ["반도체 소자", "집적회로"],
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"questions": [], "complete": True}

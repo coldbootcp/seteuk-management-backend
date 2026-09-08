@@ -101,6 +101,9 @@ class ClarifyRequest(BaseModel):
     name: str | None = None
     grade: int | None = None
     semester: int | None = None
+    # 온보딩 저장 전에는 User에 아직 프로필이 없을 수 있다. 이 요청에 실린 값을
+    # 써야 AI 확인 질문도 5/9등급제를 정확히 구분할 수 있다.
+    freshman_academic_year: int | None = Field(default=None, ge=1990, le=2100)
     career_goal: str | None = None
     target_department: str | None = None
     interest_keywords: list[str] = []

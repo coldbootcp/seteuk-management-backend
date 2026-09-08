@@ -1,4 +1,5 @@
 import json
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +7,7 @@ from app.models.user import User
 from app.schemas.profile import (
     CareerGoal,
     CareerSpecificity,
+    ClarifyQuestion,
     ClarifyRequest,
     ClarifyResponse,
     FieldKey,
@@ -13,12 +15,80 @@ from app.schemas.profile import (
     ProfileResponse,
     SuggestResponse,
 )
+from app.services.education_policy_service import get_policy_for_freshman_year
 from app.services.llm import call_structured
 from app.services.onboarding_prompts import CLARIFY_SYSTEM_PROMPT, SUGGEST_SYSTEM_PROMPT
 from app.services.student_interest_service import get_current_interests, upsert_interest
 
 # 이만큼 답을 받았으면 로드맵을 세우기에 충분하다고 보고 더 묻지 않는다.
 MAX_CLARIFY_ANSWERS = 6
+
+# LLM이 "성적을 알면 도움이 된다"고 일반론을 되풀이해도 온보딩의 역할을 넘지
+# 못하게 한다. 이 값들은 실제 성적·수강 과목·활동 기록으로 진단할 내용이다.
+_SUBJECT_PERFORMANCE_QUESTION = re.compile(
+    r"(?:현재\s*)?성적\s*수준|현재\s*이수\s*중인.*과목|"
+    r"(?:잘하는|어려운|약한|강점|약점).*과목|과목.*(?:강점|약점)|"
+    r"기초\s*학습\s*수준|학습\s*수준",
+    re.IGNORECASE,
+)
+_NONESSENTIAL_ONBOARDING_QUESTION = re.compile(
+    r"동아리|캠프|대회|학교.*프로그램|외부.*프로그램|참여.*의향|"
+    r"학습.*(?:선호|방식)|공부.*(?:선호|방식)|선호.*학습",
+    re.IGNORECASE,
+)
+_RANK_MENTION = re.compile(r"(?<!\d)([1-9])\s*(?:~|∼|\-|–|—|부터|에서)\s*([1-9])\s*등급")
+
+
+def _question_text(question: ClarifyQuestion) -> str:
+    """모델 응답 전체를 한 문장으로 합쳐 코드 필터가 보는 재료를 만든다."""
+    # ClarifyQuestion만 받지만, 호출 경계에서 타입이 흐트러져도 프롬프트 규칙을
+    # 우회하지 않도록 방어적으로 읽는다.
+    key = getattr(question, "key", "")
+    label = getattr(question, "label", "")
+    prompt = getattr(question, "question", "")
+    options = getattr(question, "options", [])
+    return " ".join([str(key), str(label), str(prompt), *[str(option) for option in options]])
+
+
+def filter_clarification_questions(
+    questions: list[ClarifyQuestion],
+    *,
+    rank_grade_scale: int | None,
+) -> list[ClarifyQuestion]:
+    """온보딩 역할 밖이거나 학생의 등급제와 맞지 않는 AI 질문을 버린다.
+
+    프롬프트만으로는 실제 호출에서 9등급제 선택지가 새어 나왔기 때문에, 학생에게
+    보이기 직전 서버에서 다시 막는다. 애매한 경우 선택지를 고쳐 내기보다 질문 전체를
+    제거한다. 성적은 이미 성적 탭·학생부에서 정본으로 관리하기 때문이다.
+    """
+    accepted = []
+    seen_prompts: set[str] = set()
+    for question in questions:
+        text = _question_text(question)
+        normalized_prompt = re.sub(r"\s+", "", str(getattr(question, "question", "")))
+        mentions_out_of_scale_rank = False
+        if rank_grade_scale is not None:
+            mentions_out_of_scale_rank = any(
+                max(int(match.group(1)), int(match.group(2))) > rank_grade_scale
+                for match in _RANK_MENTION.finditer(text)
+            )
+            # '6등급', '7등급'처럼 범위를 쓰지 않은 선택지도 막는다.
+            mentions_out_of_scale_rank = mentions_out_of_scale_rank or any(
+                int(value) > rank_grade_scale
+                for value in re.findall(r"(?<!\d)([1-9])\s*등급", text)
+            )
+
+        if (
+            _SUBJECT_PERFORMANCE_QUESTION.search(text)
+            or _NONESSENTIAL_ONBOARDING_QUESTION.search(text)
+            or mentions_out_of_scale_rank
+            or not normalized_prompt
+            or normalized_prompt in seen_prompts
+        ):
+            continue
+        seen_prompts.add(normalized_prompt)
+        accepted.append(question)
+    return accepted
 
 
 async def set_profile(db: AsyncSession, user: User, data: ProfileRequest) -> None:
@@ -89,7 +159,7 @@ async def suggest_direction(career_goal: str) -> SuggestResponse:
     )
 
 
-async def clarify_onboarding(data: ClarifyRequest) -> ClarifyResponse:
+async def clarify_onboarding(db: AsyncSession, data: ClarifyRequest) -> ClarifyResponse:
     """아직 비었거나 막연한 항목에 대해 확인 질문을 만든다.
 
     이미 받은 답(`answers`)을 함께 넘겨야 같은 것을 다시 묻지 않는다 — 이걸 빼면
@@ -101,10 +171,21 @@ async def clarify_onboarding(data: ClarifyRequest) -> ClarifyResponse:
     if len(data.answers) >= MAX_CLARIFY_ANSWERS:
         return ClarifyResponse(questions=[], complete=True)
 
+    # 진로 축을 이미 적은 학생에게 "동아리 참여 의향", "학습 방식"처럼 다음
+    # 상담에서 다뤄도 되는 정보를 캐묻지 않는다. 이 단계는 진로 정보가 비었을 때만
+    # 최소 한 번 보완하는 안전장치이고, 개인화 대화의 대체재가 아니다.
+    if data.career_goal and (data.target_department or data.interest_keywords):
+        return ClarifyResponse(questions=[], complete=True)
+
     result = await call_structured(
         CLARIFY_SYSTEM_PROMPT,
         json.dumps(data.model_dump(), ensure_ascii=False),
         ClarifyResponse,
     )
+    policy = await get_policy_for_freshman_year(db, data.freshman_academic_year)
+    result.questions = filter_clarification_questions(
+        result.questions,
+        rank_grade_scale=policy.rank_grade_scale if policy else None,
+    )[:1]
     result.complete = not result.questions
     return result
