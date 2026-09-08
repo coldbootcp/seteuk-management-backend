@@ -7,6 +7,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.consultation import router as consultation_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.diagnosis import router as diagnosis_router
+from app.api.v1.education_policies import router as education_policies_router
 from app.api.v1.plans import router as plans_router
 from app.api.v1.profile import router as profile_router
 from app.api.v1.recommendations import router as recommendations_router
@@ -20,6 +21,7 @@ api_router.include_router(admission_catalog_router)
 api_router.include_router(application_preparations_router)
 api_router.include_router(seteuk_router)
 api_router.include_router(profile_router)
+api_router.include_router(education_policies_router)
 api_router.include_router(diagnosis_router)
 api_router.include_router(consultation_router)
 for record_router in record_routers:

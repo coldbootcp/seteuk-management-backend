@@ -25,6 +25,10 @@ async def set_profile(db: AsyncSession, user: User, data: ProfileRequest) -> Non
     user.name = data.name
     user.current_grade = data.grade
     user.current_semester = data.semester
+    # 생기부에서 읽어 둔 학적사항을 빈 온보딩 값으로 지우지 않는다. 학생이 직접
+    # 넣은 숫자만 새 기준으로 확정한다.
+    if data.freshman_academic_year is not None:
+        user.freshman_academic_year = data.freshman_academic_year
 
     await upsert_interest(db, user.id, FieldKey.CAREER_GOAL, data.career_goal.model_dump())
     await upsert_interest(db, user.id, FieldKey.TARGET_DEPARTMENT, data.target_department)
@@ -57,6 +61,7 @@ async def get_profile(db: AsyncSession, user: User) -> ProfileResponse:
         name=user.name,
         grade=user.current_grade,
         semester=user.current_semester,
+        freshman_academic_year=user.freshman_academic_year,
         career_goal=CareerGoal.model_validate(career_goal) if career_goal else None,
         target_department=interests.get(FieldKey.TARGET_DEPARTMENT),
         interest_keywords=interests.get(FieldKey.INTEREST_KEYWORDS, []),

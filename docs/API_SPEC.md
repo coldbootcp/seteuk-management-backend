@@ -76,6 +76,8 @@
 | `admission_university_guides` | university_id, source_admission_year, sections(JSONB), source_url, verified_at | 대학 공통 수시·정시 특징과 입시가이드 |
 | `admission_program_references` | university_id, source_admission_year, source_reference_code, name, detail_sections(JSONB), source_url, verified_at | 과거 공개 학과 소개·모집 요약 |
 | `admission_program_outcomes` | program_reference_id, selection_name, competition_rate, metrics(JSONB), source_url, verified_at | 학과·전형별 공개 입시결과 |
+| `education_policies` | code, freshman_year_start/end, curriculum_name, rank_grade_scale, details(JSONB), source_url, verified_at | 고교 입학 연도별 교육과정·성적 제도 기준 |
+| `admission_policy_rules` | policy_id, admission_year_start/end, category, decision_scope, action_required, source_url, verified_at | 등급제만으로 단정할 수 없는 대입 공통 규칙 |
 | `application_preparations` | id, user_id, university_id, program_id, track_id, admission_year, central_question, narrative_outline | 지원처별 자소서 설계 |
 | `application_evidences` | id, preparation_id, activity_id, narrative_role, order_index, student_note | 설계에 쓸 실제 활동 근거 |
 
@@ -196,6 +198,7 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 ```json
 {
   "name": "홍길동", "grade": 2, "semester": 1,
+  "freshman_academic_year": 2025,
   "career_goal": { "goal": "AI 연구원", "note": "string 또는 null" },
   "target_department": "컴퓨터공학과",
   "interest_keywords": ["머신러닝"],
@@ -207,6 +210,10 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   "self_assessed_weaknesses": "string"
 }
 ```
+
+`freshman_academic_year`는 고등학교 입학 연도다. 현재 날짜나 현재 학년으로 역산하지
+않는다. 생기부에서 학적사항을 읽어낼 수 있으면 그 값을 후보로 제시하고, 학생의 직접
+입력과 다를 때는 어느 값을 쓸지 학생에게 보여 준다.
 
 **GET /profile/me** → 200 — `users` + `student_interests` 최신값 병합.
 
@@ -223,7 +230,23 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 `{ key, label, question, why, selection_mode, options }`이며, `why`는 학생이 답할
 이유를 알려 주기 위한 것이다. 보기는 학생의 진로에 맞춰 생성된다.
 
-### 3.3a 지원처 카탈로그
+### 3.3a 입학 연도별 교육·대입 기준
+
+**GET /education-policies/me** → 학생의 `freshman_academic_year`로 선택된 교육 제도와
+대입 공통 기준을 돌려준다. 입학 연도가 없으면 `needs_freshman_academic_year: true`로
+돌아오며, 화면은 성적 제도를 추측해 표시하면 안 된다.
+
+`policy.rank_grade_scale`은 성적 입력 UI와 서버 검증 양쪽에서 사용한다. 예를 들어
+2025학년도 고1부터 순차 적용된 2022 개정 교육과정 대상자는 5등급제 범위 밖의 숫자
+등급을 저장할 수 없다. 반대로 기존 2015 개정 교육과정 대상자의 과거 9등급 성적은
+보존한다.
+
+`admission_rules[].decision_scope`가 `track_specific`이면 등급제만으로 결론을 낼 수
+없는 정보다. 가령 **9등급제/5등급제 여부만으로 졸업생·재수생의 수시 지원 가능 여부를
+판정하지 않는다.** 대학·모집단위·전형별 졸업연도, 추천, 지역 요건을 해당 전형의
+모집요강에서 확인해야 한다. 그 전에는 "가능" 또는 "불가"로 표시하지 않는다.
+
+### 3.3b 지원처 카탈로그
 
 자소서·면접 준비에서 쓰는 공용 기준 데이터다. 학생의 성적이나 활동으로 적합도를
 판정하지 않으며, 선택을 돕기 위해 `대학 → 모집단위 → 전형` 순서로만 제공한다.
@@ -268,7 +291,7 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 원문 학년도(`source_admission_year`)와 공식 파일 링크(`source_url`)도 함께 돌려
 과거 자료를 참고로 쓸 때 사용자가 혼동하지 않게 한다.
 
-### 3.3b 자소서 설계
+### 3.3c 자소서 설계
 
 초안을 만들기 전, 학생의 실제 활동만 근거로 `3년 활동 흐름 → 중심 질문 → 한 편의
 글 구조`를 저장한다. 이 API는 대학 합격 가능성이나 전형 적합도를 판정하지 않는다.
@@ -413,6 +436,10 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 
 응답에는 읽기 전용 `source_upload_id`가 포함된다. null이면 직접 입력한 행이라
 생기부 재업로드에도 살아남는다. 생성 요청으로는 이 값을 지정할 수 없다.
+
+`/academic-performance`의 숫자 `rank`는 학생의 입학 연도로 선택된 등급제 범위에서도
+검증한다. 화면을 우회한 요청도 5등급제 대상자에게 6~9등급을 저장할 수 없으며,
+정책이 아직 판별되지 않으면 원문 보존을 위해 1~9등급 숫자만 허용한다.
 
 > 주의: 생기부에서 파싱된 행을 PATCH로 고친 뒤 생기부를 다시 업로드하면 그 수정은
 > 새 파싱 결과로 교체된다. 유지되어야 하는 보정이라면 직접 입력 행으로 다시 만들 것.

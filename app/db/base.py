@@ -25,6 +25,7 @@ from app.models import award as _award  # noqa: E402, F401
 from app.models import consultation as _consultation  # noqa: E402, F401
 from app.models import conversation as _conversation  # noqa: E402, F401
 from app.models import diagnosis as _diagnosis  # noqa: E402, F401
+from app.models import education_policy as _education_policy  # noqa: E402, F401
 from app.models import plan_item as _plan_item  # noqa: E402, F401
 from app.models import reading_activity as _reading_activity  # noqa: E402, F401
 from app.models import recommendation as _recommendation  # noqa: E402, F401

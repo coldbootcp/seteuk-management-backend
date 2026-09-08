@@ -30,6 +30,7 @@ async def test_set_profile_persists_and_is_readable(
     body = post_response.json()
     assert body["name"] == "홍길동"
     assert body["grade"] == 2
+    assert body["freshman_academic_year"] is None
     assert body["career_goal"]["goal"] == "AI 연구원"
     assert body["interest_keywords"] == ["머신러닝", "로봇공학"]
 

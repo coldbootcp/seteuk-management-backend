@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FieldKey(StrEnum):
@@ -31,6 +31,9 @@ class ProfileRequest(BaseModel):
     name: str
     grade: int
     semester: int
+    # 생기부가 없어서 학적사항을 읽을 수 없는 경우에도 교육과정·등급제를 정확히
+    # 판정하기 위해 온보딩에서 한 번 받는다. 이후 날짜로 추정하지 않는다.
+    freshman_academic_year: int | None = Field(default=None, ge=1990, le=2100)
     career_goal: CareerGoal
     target_department: str
     interest_keywords: list[str]
@@ -46,6 +49,7 @@ class ProfileResponse(BaseModel):
     name: str | None = None
     grade: int | None = None
     semester: int | None = None
+    freshman_academic_year: int | None = None
     career_goal: CareerGoal | None = None
     target_department: str | None = None
     interest_keywords: list[str] = []
