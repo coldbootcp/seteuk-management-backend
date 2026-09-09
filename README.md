@@ -9,7 +9,7 @@ notes into one coherent research narrative.**
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org)
 [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0%20async-D71F00?style=flat-square)](https://sqlalchemy.org)
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek-4D6BFE?style=flat-square)](https://deepseek.com)
+![LLM](https://img.shields.io/badge/LLM-provider--agnostic-6366F1?style=flat-square)
 
 <sub>The web frontend lives in a separate repository. Start there to see the product.</sub>
 
@@ -59,30 +59,12 @@ plan remembers the record it came from. That lineage is what lets the system pro
 | **Plans & recommendations** | Suggestions are drafts. Adopting one turns it into a plan; completing a plan promotes it into a real record, inheriting the lineage. |
 | **Chatbot** | SSE streaming with an edit mode whose 13 tools call the same services the tabs do. **There is no delete tool** — records can never disappear because of a misunderstanding in conversation. |
 
-## Design rules
-
-These hold across the codebase.
-
-- **Propose, then confirm.** Onboarding suggestions store nothing. Parsing stops at
-  `raw_result` and only what the student selects is imported. Roadmaps are drafts until
-  `/confirm`.
-- **The model is a translator, not an author.** Prompts get pre‑computed, scoped
-  material and are asked to phrase it. Anything the data does not support is left out
-  rather than smoothed over.
-- **Prompts ask; code guarantees.** A reviewer filters duplicate suggestions, overlaps
-  with existing plans, and claims about admissions or health — because responses that
-  ignore those instructions were observed repeatedly in practice.
-- **LLMs never handle UUIDs.** Batch calls hand the model integer indices and map them
-  back, after a single dropped character in a UUID invalidated a whole batch.
-- **Plans and records never share a table.** The future lives in `plan_items`, the past
-  in the domain tables, and completion is the only bridge.
-
 ## Getting started
 
 Requires **Python 3.12+**, [uv](https://github.com/astral-sh/uv), and PostgreSQL.
 
 ```bash
-cp .env.example .env        # fill in DATABASE_URL, JWT_SECRET, DEEPSEEK_API_KEY
+cp .env.example .env        # fill in DATABASE_URL, JWT_SECRET and a model API key
 docker compose up -d db     # or point DATABASE_URL at your own PostgreSQL
 uv sync
 uv run alembic upgrade head
@@ -105,7 +87,7 @@ Full list in `.env.example`. The ones that matter:
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://…` |
 | `JWT_SECRET` | Required |
-| `DEEPSEEK_API_KEY` | **Every** generation path uses DeepSeek — parser, diagnosis, plans, recommendations, chat |
+| `LLM_PROVIDER` + its API key | The model provider sits behind a boundary in `app/services/llm/provider.py`, so parser, diagnosis, plans, recommendations and chat all go through one seam |
 | `CORS_ORIGINS` | Comma‑separated; the frontend always runs on a different origin |
 | `DAILY_*_LIMIT` | Per‑user 24‑hour sliding window, counted in `usage_events` so it survives restarts and multiple workers |
 
@@ -116,7 +98,8 @@ app/
   api/v1/      auth · profile · seteuk · diagnosis · records · plans ·
                roadmaps · recommendations · conversations · consultation
   services/    parser · diagnosis pipeline · chat (context, tools, prompts) ·
-               plans · recommendations · review · llm provider boundary
+               plans · recommendations · review
+  services/llm/  the provider boundary — every model call goes through here
   models/      SQLAlchemy models, one file per domain
   schemas/     Pydantic — reused for both API responses and LLM structured output
   core/        config · security · dependencies · rate limiting · logging
@@ -129,7 +112,7 @@ respect, the current state, and the traps that cost the most time.
 
 ## Status
 
-Working prototype, verified end‑to‑end with a real DeepSeek key and a real school record
+Working prototype, verified end‑to‑end with a real model key and a real school record
 PDF: sign‑up through parsing, diagnosis, consultation, records, follow‑up
 recommendations, plan promotion, lineage and both chatbot modes. Not deployed publicly
 yet.
