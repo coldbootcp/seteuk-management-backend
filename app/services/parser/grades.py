@@ -65,11 +65,22 @@ def infer_category(subject: str) -> str:
 # than the table-based approach, so it is the primary path; parse_academic_performance
 # stays as a fallback for exports that render this section as PARSER_SPEC.md describes
 # ("[N학년]" bracket headers over free-standing score lines) rather than a real table.
+# 등급 과목(A~E)과 P(합격/불합격) 과목은 열 구성 자체가 다르다. 등급 과목은
+# "성취도(수강자수) 석차등급"까지 네 칸이 다 있지만, P 과목은 석차가 존재하지
+# 않는 개념이라 이 문서에서는 그 칸이 아예 비어 있다(글자조차 없음). rank를
+# 항상 필수로 두면, P 과목 뒤에 그 칸이 없으니 정규식이 바로 다음 과목의
+# 단위수 숫자를 이 과목의 석차로 잘못 삼켜 버린다 — 실제로 "보건" 다음
+# "공학 일반"의 이름과 단위수가 이렇게 통째로 씹혔다. 그래서 두 모양을 아예
+# 다른 갈래로 나눈다: 등급 과목만 석차를 필수로 요구하고, P 과목은 그 자리에서
+# 매칭을 끝내 뒤따르는 글자를 절대 건드리지 않는다.
 SCORE_TUPLE_PATTERN = re.compile(
     r"(?P<units>\d+)\s+"
     r"(?P<score>P|\d+/\d+\.\d+(?:\(\d+\.\d+\))?)\s+"
-    r"(?P<achievement>[A-EP](?:\(\d+\))?)\s+"
-    r"(?P<rank>[1-9]|·)"
+    r"(?:"
+    r"(?P<achievement>[A-E])\((?P<student_count>\d+)\)\s+(?P<rank>[1-9]|·)"
+    r"|"
+    r"(?P<achievement_p>P)"
+    r")"
 )
 
 _KNOWN_CATEGORIES = [
@@ -159,9 +170,15 @@ def parse_academic_performance_from_text(section_text: str) -> list[AcademicPerf
     while i < len(matches):
         current = matches[i]
         next_match = matches[i + 1] if i + 1 < len(matches) else None
-        is_same_subject_next_semester = (
-            next_match is not None and next_match.start() - current.end() < 15
-        )
+        # 같은 과목의 1·2학기가 나란히 있으면 그 사이에는 과목명이 다시 나오지
+        # 않는다 — 숫자 열이 바로 이어 붙는다. 예전에는 "글자 수가 15자 미만이면
+        # 같은 과목"으로 판단했는데, 다음 과목의 이름이 짧으면(예: "문학" 2글자 +
+        # 교과 "국어" 2글자) 그 15자 문턱을 넘지 못해 서로 다른 두 과목이 하나로
+        # 합쳐졌다 — 실제 생기부에서 "문학", "수학Ⅱ", "영어Ⅰ", "물리학Ⅰ"이 이렇게
+        # 통째로 사라지고 그 값이 앞 과목의 2학기 성적으로 잘못 붙었다. 사이에
+        # 글자(과목명)가 조금이라도 있으면 다른 과목이다 — 없어야만 같은 과목이다.
+        gap_text = clean_text[current.end() : next_match.start()] if next_match else ""
+        is_same_subject_next_semester = next_match is not None and gap_text.strip() == ""
 
         prefix = clean_text[last_end : current.start()]
         category, subject = _prefix_to_category_and_subject(prefix)
@@ -198,10 +215,9 @@ def _build_item(
             subject_average = float(score_match.group(2))
             std_deviation = float(score_match.group(3))
 
-    achievement_match = re.match(r"([A-EP])(?:\((\d+)\))?", match["achievement"])
-    achievement_grade = achievement_match.group(1) if achievement_match else match["achievement"]
-    has_count = achievement_match and achievement_match.group(2)
-    student_count = int(achievement_match.group(2)) if has_count else None
+    achievement_grade = match["achievement"] or match["achievement_p"]
+    student_count = int(match["student_count"]) if match["student_count"] else None
+    rank = match["rank"]
 
     return AcademicPerformanceItem(
         grade=grade,
@@ -214,7 +230,7 @@ def _build_item(
         raw_score=raw_score,
         subject_average=subject_average,
         std_deviation=std_deviation,
-        rank=None if match["rank"] == "·" else match["rank"],
+        rank=None if rank in (None, "·") else rank,
     )
 
 

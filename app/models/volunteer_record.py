@@ -28,6 +28,10 @@ class VolunteerRecord(Base):
         index=True,
     )
     grade: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 봉사활동실적 표는 학년만 열로 갖지만 일자가 있어 학기까지 정할 수 있다.
+    # 학기를 알면 흐름 맵이 그 학기에만 놓을 수 있다 — 비어 있으면 학년 단위
+    # 기록으로 두 학기에 함께 보여야 한다.
+    semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
     date: Mapped[date | None] = mapped_column(Date, nullable=True)
     raw_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
     place: Mapped[str | None] = mapped_column(String(255), nullable=True)

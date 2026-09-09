@@ -1,10 +1,11 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from app.schemas.seteuk import AcademicPerformanceItem
 from app.services.parser.anchors import (
     GRADE_HEADER_PATTERN,
-    SEMESTER_LABEL_PATTERN,
     nearest_preceding,
+    semester_markers,
 )
 
 
@@ -14,6 +15,16 @@ class TextBlock:
     semester: int | None
     subject: str | None
     text: str
+
+
+def _flexible_whitespace(name: str) -> str:
+    """과목명 내부의 공백은 PDF 줄바꿈이 남긴 흔적이라 위치가 문서 안에서도
+    들쭉날쭉하다 — 예를 들어 "로봇 소프트웨어 개발"이 성적표 열에서는 줄바꿈에
+    걸려 "로봇 소프트웨\\n어 개발"이 되지만, 세특 본문에서는 줄바꿈 없이
+    "로봇 소프트웨어 개발"로 그대로 나온다. 공백을 문자 그대로 요구하면 후자를
+    앵커로 못 찾아 그 과목의 세특 전체가 조용히 사라진다(실제로 그랬다).
+    """
+    return r"\s*".join(re.escape(part) for part in name.split())
 
 
 def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlock]:
@@ -27,12 +38,15 @@ def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlo
         return []
 
     ordered_subjects = sorted(set(subjects), key=len, reverse=True)
-    anchor_pattern = re.compile(
-        "(" + "|".join(re.escape(s) for s in ordered_subjects) + r")\s*(?:\([^)]*\))?\s*:"
-    )
+    # 공백을 지운 형태로 정본을 되찾는다 — 매칭된 텍스트가 줄바꿈 흔적 없는 표기여도
+    # academic_performance와 같은 문자열(정본)을 subject로 남겨야 한 학기에만
+    # 개설된 과목 추론 등 다른 곳과 키가 어긋나지 않는다.
+    canonical_by_compact = {re.sub(r"\s+", "", s): s for s in ordered_subjects}
+    alternation = "|".join(_flexible_whitespace(s) for s in ordered_subjects)
+    anchor_pattern = re.compile("(" + alternation + r")\s*(?:\([^)]*\))?\s*:")
     anchors = list(anchor_pattern.finditer(section_text))
     grade_headers = list(GRADE_HEADER_PATTERN.finditer(section_text))
-    semester_labels = list(SEMESTER_LABEL_PATTERN.finditer(section_text))
+    semester_labels = semester_markers(section_text)
 
     blocks: list[TextBlock] = []
     for i, anchor in enumerate(anchors):
@@ -48,11 +62,13 @@ def slice_subject_blocks(section_text: str, subjects: list[str]) -> list[TextBlo
             continue
 
         semester_anchor = nearest_preceding(semester_labels, anchor.start())
+        matched = anchor.group(1)
+        subject = canonical_by_compact.get(re.sub(r"\s+", "", matched), matched)
         blocks.append(
             TextBlock(
                 grade=int(grade_anchor.group(1)),
                 semester=int(semester_anchor.group(1)) if semester_anchor else None,
-                subject=anchor.group(1),
+                subject=subject,
                 text=text,
             )
         )
@@ -71,7 +87,7 @@ def slice_grade_semester_blocks(section_text: str) -> list[TextBlock]:
         end = grade_headers[i + 1].start() if i + 1 < len(grade_headers) else len(section_text)
         block_text = section_text[start:end]
 
-        semester_labels = list(SEMESTER_LABEL_PATTERN.finditer(block_text))
+        semester_labels = semester_markers(block_text)
         if not semester_labels:
             stripped = block_text.strip()
             if stripped:
@@ -90,3 +106,32 @@ def slice_grade_semester_blocks(section_text: str) -> list[TextBlock]:
                 )
 
     return blocks
+
+
+def infer_semester_from_single_semester_subjects(
+    blocks: list[TextBlock], grades: list[AcademicPerformanceItem]
+) -> list[TextBlock]:
+    """세특 본문은 학기를 나누지 않는 경우가 많다(과목당 한 덩어리로 쓰여 있다).
+    하지만 몇몇 과목은 한 학기에만 개설된다 — 성적표에 그 과목의 단위수가 한
+    학기에만 있다면, 다음 학기엔 그 과목 자체가 없었다는 뜻이라 그 과목의 세특도
+    그 학기의 것일 수밖에 없다(실제 생기부에서 "로봇 제작", "보건", "물리학Ⅱ"
+    등 9개 과목이 이 경우였다).
+
+    이미 다른 근거로 학기를 아는 블록은 건드리지 않는다. 한 과목이 두 학기 모두
+    성적이 있으면 이 방법으로는 판단할 수 없으므로 그대로 학년 단위로 둔다 —
+    지어내지 않는 편이 낫다.
+    """
+    semesters_by_subject: dict[tuple[int, str], set[int]] = {}
+    for g in grades:
+        semesters_by_subject.setdefault((g.grade, g.subject), set()).add(g.semester)
+
+    filled: list[TextBlock] = []
+    for block in blocks:
+        if block.semester is not None or block.subject is None:
+            filled.append(block)
+            continue
+        semesters = semesters_by_subject.get((block.grade, block.subject))
+        if semesters is not None and len(semesters) == 1:
+            block = replace(block, semester=next(iter(semesters)))
+        filled.append(block)
+    return filled

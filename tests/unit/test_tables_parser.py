@@ -11,8 +11,11 @@ AWARDS_TABLE = [
     ["수학 경시대회", "금상(1위)", "2023.05.20"],
 ]
 
+# 실제 생기부는 제목 행("학 년 | 봉 사 활 동 실 적")이 먼저 오고 머리글이 둘째
+# 행에 온다. 봉사 파서는 그 제목으로 자기 표를 알아본다.
 VOLUNTEER_TABLE = [
-    ["학년", "일자", "장소", "내용", "시간"],
+    ["학 년", "봉 사 활 동 실 적", "", "", ""],
+    ["", "일자", "장소", "내용", "시간"],
     ["2", "2023.07.15", "지역아동센터", "학습 멘토링", "8"],
 ]
 
@@ -83,7 +86,8 @@ def test_parse_volunteer_records_collapses_line_wrap_to_a_space() -> None:
     # rather than removed outright, since there's no reliable way to tell a mid-word
     # wrap ("종\n료" -> "종료") apart from a wrap between two separate words.
     table = [
-        ["학년", "일자", "장소", "내용", "시간"],
+        ["학 년", "봉 사 활 동 실 적", "", "", ""],
+        ["", "일자", "장소", "내용", "시간"],
         ["1", "2023.05.17.", "가온고등학교", "교내 스포츠 어울마당 종\n료 후 교내 환경정리", "1"],
     ]
 
@@ -130,3 +134,102 @@ def test_parse_reading_activities_extracts_multiple_books_from_one_cell() -> Non
     assert items[0].author == "손원평"
     assert items[1].title == "인간실격"
     assert items[1].author == "다자이 오사무"
+
+
+def test_award_without_a_date_stays_empty() -> None:
+    """수상연월일이 없으면 학년-학기를 정할 근거가 없다. 비워 둔다."""
+    table = [
+        ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
+        ["표창장", "", "", "가온고", "전교생(929명)"],
+    ]
+    [item] = parse_awards([table], freshman_year=2018)
+    assert item.grade is None and item.semester is None
+
+
+def test_award_period_comes_from_the_enrollment_year_not_participants() -> None:
+    """학년-학기는 학적사항의 입학 학년도를 기준으로 수상연월일에서 정한다.
+    참가대상("3학년(216명)")도 학년을 담고 있지만 근거로 쓰지 않는다 — 여러 학년이
+    함께 응모한 대회나 "수강자"·"전교생"처럼 학년을 말해 주지 않는 행이 많다."""
+    table = [
+        ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
+        ["과학 탐구 대회", "금상(1위)", "2020.08.13.", "가온고", "3학년(216명)"],
+        ["교과우수상(영어)", "", "2019.01.11.", "가온고", "수강자"],
+        ["모의재판", "우수상(2위)", "2019.06.19.", "가온고", "1·2학년 중 참가자(60명)"],
+    ]
+    # 2018학년도에 1학년이었다면 2019-01은 1학년 2학기, 2019-06은 2학년 1학기다.
+    items = parse_awards(table and [table], freshman_year=2018)
+    assert [(i.grade, i.semester) for i in items] == [(3, 1), (1, 2), (2, 1)]
+
+
+def test_award_period_is_left_empty_without_an_anchor() -> None:
+    """기준점이 없으면 학년을 지어내지 않는다 — 오늘 날짜로 되짚으면 몇 해 전
+    생기부의 수상이 전부 학년 범위 밖으로 떨어진다."""
+    table = [
+        ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
+        ["과학 탐구 대회", "금상(1위)", "2020.08.13.", "가온고", "3학년(216명)"],
+    ]
+    [item] = parse_awards([table])
+    assert item.grade is None and item.semester is None
+    assert item.participants == "3학년(216명)"
+
+
+def test_award_table_with_a_section_title_row_is_not_skipped() -> None:
+    """수상 표도 첫 행이 섹션 제목("4. 수 상 경 력")이고 진짜 머리글이 둘째 행에
+    오는 경우가 있다. 첫 행만 머리글로 보면 그 표를 통째로 건너뛴다 — 실제
+    생기부에서 1학년 수상 14건이 이렇게 조용히 사라졌다."""
+    table = [
+        ["4. 수 상 경 력", "", "", "", ""],
+        ["수상명", "등급(위)", "수상연월일", "수여기관", "참가대상(참가인원)"],
+        ["영시공모전", "우수상(2위)", "2018.07.19.", "가온고", "1·2학년 중 참가자(147명)"],
+        ["수학독서발표대회", "우수상(2위)", "2018.09.20.", "가온고", "1학년 중 참가자(38명)"],
+    ]
+    items = parse_awards([table], freshman_year=2018)
+
+    assert [i.name for i in items] == ["영시공모전", "수학독서발표대회"]
+    assert [(i.grade, i.semester) for i in items] == [(1, 1), (1, 2)]
+    # 제목 행이 기록으로 새어 들어오면 안 된다.
+    assert "4. 수 상 경 력" not in [i.name for i in items]
+
+
+def test_reading_table_with_a_section_title_row_is_not_skipped() -> None:
+    """독서 표도 첫 행이 섹션 제목("9. 독서활동상황")이고 진짜 머리글이 둘째 행에
+    온다. 첫 행만 보면 그 표를 통째로 건너뛰어 1학년 독서가 전부 사라졌다."""
+    table = [
+        ["9. 독서활동상황", "", ""],
+        ["학 년", "과목 또는 영역", "독서활동 상황"],
+        ["1", "국어", "(1학기) 죽은 시인의 사회(N.H. 클라인 바움), 아몬드(손원평)"],
+        ["", "수학", "(2학기) 미적분으로 바라본 하루(오스카 페르난데스)"],
+    ]
+    items = parse_reading_activities([table])
+
+    assert [(i.grade, i.semester, i.title) for i in items] == [
+        (1, 1, "죽은 시인의 사회"),
+        (1, 1, "아몬드"),
+        (1, 2, "미적분으로 바라본 하루"),
+    ]
+
+
+def test_volunteer_semester_comes_from_the_date() -> None:
+    """봉사활동실적 표는 학년만 열로 갖지만 일자가 있다. 학기까지 정할 수 있으면
+    흐름 맵이 그 학기에만 놓을 수 있다 — 비어 있으면 학년 단위로 두 학기에
+    함께 보여야 한다."""
+    table = [
+        ["학 년", "봉 사 활 동 실 적", "", "", "", ""],
+        ["", "일자 또는 기간", "장소 또는 주관기관명", "활동내용", "시간", "누계시간"],
+        ["1", "2018.03.23.", "(학교)가온고등학교", "봉사활동 사전교육", "1", "1"],
+        ["", "2018.11.05.", "(개인)문기지역아동센터", "학습지도", "2", "3"],
+    ]
+    items = parse_volunteer_records([table])
+
+    assert [(i.grade, i.semester) for i in items] == [(1, 1), (1, 2)]
+    assert [i.hours for i in items] == [1, 2]
+
+
+def test_only_the_volunteer_table_is_read() -> None:
+    """"내용"이라는 낱말만으로 표를 고르면 세특처럼 본문에 그 말이 우연히 들어간
+    표까지 걸린다. 실제 생기부에서 세특 표 하나가 봉사 파서에 잡혔다."""
+    seteuk = [
+        ["과목", "세 부 능 력 및 특 기 사 항"],
+        ["1", "한국사: 답사 보고서의 내용을 일자별로 정리하고 3시간에 걸쳐 발표함"],
+    ]
+    assert parse_volunteer_records([seteuk]) == []

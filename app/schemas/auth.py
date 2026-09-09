@@ -30,3 +30,13 @@ class RefreshRequest(BaseModel):
 
 class AccessTokenResponse(BaseModel):
     access_token: str
+
+
+class KakaoLoginRequest(BaseModel):
+    kakao_access_token: str
+
+
+class KakaoLoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    is_new_user: bool

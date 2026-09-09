@@ -47,5 +47,14 @@ jobs:
       - name: Ruff check
         run: uv run ruff check .
 
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      # 모델을 고치고 마이그레이션을 빼먹는 사고를 막는다 — autogenerate가
+      # 무언가를 감지하면 스키마와 모델이 어긋난 것이다.
+      - name: Check migrations are up to date with models
+        run: |
+          uv run alembic check
+
       - name: Run tests
         run: uv run pytest -v
