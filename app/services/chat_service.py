@@ -80,6 +80,13 @@ _METHOD_PREFERENCE_REASK = re.compile(
 _UNVERIFIED_SPECIFIC_COURSE = re.compile(
     r"(?:국어|영어|수학|물리(?:학)?|화학|생명과학|지구과학|통합과학|정보)\s*[ⅠⅡIVX0-9]+"
 )
+_INTERNAL_DRAFT_RETRY = re.compile(
+    r"(?:설계|계획)\s*(?:저장\s*)?형식이\s*잘못되어\s*다시\s*시도하겠습니다\.?\s*"
+)
+_DRAFT_SAVED_CLAIM = re.compile(r"계획이\s*(?:잘\s*)?저장되었습니다")
+_PREMATURE_DRAFT_CONFIRMATION = re.compile(
+    r"계획\s*초안(?:을|이)[^.!?]{0,80}(?:확정|저장)[^.!?]{0,80}[.!?]\s*"
+)
 
 
 def _period_index(grade: int, semester: int) -> int:
@@ -133,6 +140,12 @@ def filter_consultation_output_for_period(
     # 중립적인 표현으로 바꾼다.
     if not has_current_course_data:
         filtered = _UNVERIFIED_SPECIFIC_COURSE.sub("실제 수강 중인 관련 과목", filtered)
+
+    # 초안 도구의 재시도는 모델 내부 처리일 뿐 학생이 볼 오류가 아니다. 또한
+    # 상담 완료 전에는 계획이 확정·저장된 것이 아니므로 표현을 바로잡는다.
+    filtered = _INTERNAL_DRAFT_RETRY.sub("", filtered)
+    filtered = _DRAFT_SAVED_CLAIM.sub("이번 학기 계획 초안을 정리했습니다", filtered)
+    filtered = _PREMATURE_DRAFT_CONFIRMATION.sub("", filtered)
 
     # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
     # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를

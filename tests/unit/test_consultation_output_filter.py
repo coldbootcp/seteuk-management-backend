@@ -78,6 +78,32 @@ def test_filter_does_not_assume_a_specific_current_course() -> None:
     assert "실제 수강 중인 관련 과목" in result
 
 
+def test_filter_hides_internal_draft_retry_and_preserves_draft_status() -> None:
+    result = filter_consultation_output_for_period(
+        "설계 저장 형식이 잘못되어 다시 시도하겠습니다. 계획이 잘 저장되었습니다. "
+        "이 내용으로 확정해도 괜찮을까요?",
+        target_grade=2,
+        target_semester=2,
+    )
+
+    assert "형식이 잘못" not in result
+    assert "계획 초안을 정리했습니다" in result
+    assert "확정해도" in result
+
+
+def test_filter_removes_premature_draft_confirmation_claim() -> None:
+    result = filter_consultation_output_for_period(
+        "계획 초안을 확정해 드리겠습니다. 계획 초안이 잘 정리되어 저장되었습니다. "
+        "이 계획은 초안 상태이며, 나가기 버튼을 눌러야 실제로 확정됩니다.",
+        target_grade=2,
+        target_semester=2,
+    )
+
+    assert "확정해 드리겠습니다" not in result
+    assert "저장되었습니다" not in result
+    assert "나가기 버튼" in result
+
+
 def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
     result = filter_consultation_output_for_period(
         "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
