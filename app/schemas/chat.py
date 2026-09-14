@@ -12,6 +12,9 @@ class ConversationRead(BaseModel):
 
     id: uuid.UUID
     title: str | None
+    # 화면이 일반 잡담과 진단+상담 대화를 구분해 목록에서 걸러낼 수 있도록 노출한다.
+    # 컬럼 자체는 이미 있었는데(Conversation.purpose) 응답에 빠져 있었다.
+    purpose: str
     created_at: datetime
     updated_at: datetime
 

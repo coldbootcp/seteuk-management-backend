@@ -570,7 +570,7 @@ LLM 컨텍스트에는 추출 텍스트만 실리고 파일 본문은 싣지 않
 
 ### 3.8 AI 챗봇
 
-**POST /conversations** → 201 `{ id, title, created_at, updated_at }`
+**POST /conversations** → 201 `{ id, title, purpose, created_at, updated_at }`
 **GET /conversations** → `{ items, total }` (최근 대화 순)
 **DELETE /conversations/{id}** → 204
 **GET /conversations/{id}/messages** → 200 메시지 배열
