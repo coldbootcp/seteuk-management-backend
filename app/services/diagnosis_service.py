@@ -8,7 +8,6 @@ from app.db.session import AsyncSessionLocal
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.schemas.diagnosis import DiagnosisResult, PreQuestion, PreQuestionAnswer
 from app.services.diagnosis import pipeline
-from app.services.diagnosis.data import get_domain_rows
 from app.services.student_interest_service import get_current_interests, upsert_interest
 
 
@@ -18,13 +17,14 @@ async def has_completed_diagnosis_before(db: AsyncSession, user_id: uuid.UUID) -
 
 
 async def get_pre_questions(db: AsyncSession, user_id: uuid.UUID) -> list[PreQuestion]:
-    """최초 진단 전에만 사전질문을 낸다 — 재진단부턴 항상 빈 배열."""
-    if await has_completed_diagnosis_before(db, user_id):
-        return []
+    """호환성을 위해 남긴 구 API. 진단 전 설문은 더 이상 생성하지 않는다.
 
-    interests = await get_current_interests(db, user_id)
-    seteuk_summary = await get_domain_rows(db, user_id)
-    return await pipeline.generate_pre_questions(interests, seteuk_summary)
+    기록을 읽기도 전에 LLM이 성적 수준·학습 방식·동아리 같은 일반론을 질문하며
+    학생을 멈춰 세우는 문제가 반복됐다. 진단은 보유한 사실 데이터만으로 먼저
+    실행하고, 정말 필요한 확인은 기준일 문맥을 아는 상담 챗봇이 한 번에 하나씩
+    대화 안에서 다룬다.
+    """
+    return []
 
 
 async def submit_pre_question_answers(
@@ -106,8 +106,16 @@ async def get_latest_diagnosis(db: AsyncSession, user_id: uuid.UUID) -> Diagnosi
     return diagnosis
 
 
-def to_result(diagnosis: Diagnosis) -> DiagnosisResult:
+def to_result(diagnosis: Diagnosis, *, has_evidence: bool = True) -> DiagnosisResult:
     """상태와 무관하게 항상 반환 — processing/failed면 결과 필드가 비어있을 뿐."""
+    # 코드 수정 전에 빈 입력으로 만들어진 진단도 있다. 새 진단을 다시 실행하지
+    # 않았더라도, 실제 근거가 없는 사용자는 그 과거의 환각 결과를 보지 않게 한다.
+    if not has_evidence:
+        return DiagnosisResult(
+            diagnosis_id=diagnosis.id,
+            status=diagnosis.status,
+            grades_trend=diagnosis.grades_trend,
+        )
     return DiagnosisResult(
         diagnosis_id=diagnosis.id,
         status=diagnosis.status,

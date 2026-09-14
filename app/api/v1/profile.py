@@ -59,4 +59,4 @@ async def clarify_onboarding(
 ) -> ClarifyResponse:
     """지금까지 채운 답변을 보고, 아직 비었거나 막연한 부분에 대해 확인 질문을 만든다."""
     await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
-    return await profile_service.clarify_onboarding(data)
+    return await profile_service.clarify_onboarding(db, data)

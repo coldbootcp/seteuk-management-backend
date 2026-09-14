@@ -63,6 +63,11 @@ class RecordNotFoundError(AppError):
     error_code = "RECORD_NOT_FOUND"
 
 
+class GradeScaleMismatchError(AppError):
+    status_code = 422
+    error_code = "GRADE_SCALE_MISMATCH"
+
+
 class ActivityNotFoundError(AppError):
     status_code = 404
     error_code = "ACTIVITY_NOT_FOUND"

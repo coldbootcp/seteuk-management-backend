@@ -16,6 +16,7 @@ from app.schemas.diagnosis import (
     PreQuestionsResponse,
 )
 from app.services import diagnosis_service
+from app.services.diagnosis.data import has_diagnosis_evidence
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
 
@@ -56,7 +57,10 @@ async def get_latest_diagnosis(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DiagnosisResult:
     diagnosis = await diagnosis_service.get_latest_diagnosis(db, user.id)
-    return diagnosis_service.to_result(diagnosis)
+    return diagnosis_service.to_result(
+        diagnosis,
+        has_evidence=await has_diagnosis_evidence(db, user.id),
+    )
 
 
 @router.get("/{diagnosis_id}", response_model=DiagnosisResult)
@@ -66,4 +70,7 @@ async def get_diagnosis(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DiagnosisResult:
     diagnosis = await diagnosis_service.get_diagnosis(db, user.id, diagnosis_id)
-    return diagnosis_service.to_result(diagnosis)
+    return diagnosis_service.to_result(
+        diagnosis,
+        has_evidence=await has_diagnosis_evidence(db, user.id),
+    )
