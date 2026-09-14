@@ -55,6 +55,7 @@ from app.services import (
     record_service,
     roadmap_service,
 )
+from app.services.education_policy_service import validate_rank_for_user
 
 
 class Pagination(BaseModel):
@@ -106,6 +107,8 @@ def build_record_router(
     filter_schema: type[Pagination],
     order_by: Callable[[], list[UnaryExpression]],
     after_create: Callable[[AsyncSession, User, Any], Awaitable[None]] | None = None,
+    before_create: Callable[[AsyncSession, User, BaseModel], Awaitable[None]] | None = None,
+    before_update: Callable[[AsyncSession, User, BaseModel], Awaitable[None]] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[tag])
 
@@ -135,6 +138,8 @@ def build_record_router(
         user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> Any:
+        if before_create is not None:
+            await before_create(db, user, data)
         row = await record_service.create_record(db, model, user.id, data.model_dump())
         if after_create is not None:
             await after_create(db, user, row)
@@ -156,6 +161,8 @@ def build_record_router(
         user: Annotated[User, Depends(get_current_user)],
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> Any:
+        if before_update is not None:
+            await before_update(db, user, data)
         row = await record_service.update_record(
             db, model, user.id, record_id, data.model_dump(exclude_unset=True)
         )
@@ -170,6 +177,21 @@ def build_record_router(
         await record_service.delete_record(db, model, user.id, record_id)
 
     return router
+
+
+async def _validate_academic_performance_create(
+    db: AsyncSession, user: User, data: BaseModel
+) -> None:
+    await validate_rank_for_user(db, user, getattr(data, "rank", None))
+
+
+async def _validate_academic_performance_update(
+    db: AsyncSession, user: User, data: BaseModel
+) -> None:
+    # 부분 수정에서 rank를 건드리지 않았다면 기존 성적은 보존한다. rank가 명시된
+    # 경우에만 현재 학생에게 맞는 등급제를 다시 확인한다.
+    if "rank" in data.model_fields_set:
+        await validate_rank_for_user(db, user, getattr(data, "rank", None))
 
 
 attendance_router = build_record_router(
@@ -196,6 +218,8 @@ academic_performance_router = build_record_router(
         AcademicPerformance.semester.asc(),
         AcademicPerformance.subject.asc(),
     ],
+    before_create=_validate_academic_performance_create,
+    before_update=_validate_academic_performance_update,
 )
 
 reading_activity_router = build_record_router(

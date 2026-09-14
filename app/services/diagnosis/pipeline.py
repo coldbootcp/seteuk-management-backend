@@ -20,9 +20,7 @@ from app.schemas.diagnosis import (
     KnowledgeGraphDraft,
     KnowledgeGraphLink,
     OverallAssessmentDraft,
-    PreQuestion,
     PreQuestionAnswer,
-    PreQuestionsResponse,
     SemesterReview,
     SemesterReviewDraft,
 )
@@ -33,6 +31,7 @@ from app.services.diagnosis.data import (
     get_activities_by_grade,
     get_career_thread_material,
     get_semester_groups,
+    has_diagnosis_evidence,
 )
 from app.services.diagnosis.prompts import (
     ACTIVITY_INVENTORY_SYSTEM_PROMPT,
@@ -40,7 +39,6 @@ from app.services.diagnosis.prompts import (
     INTEREST_EXTRACTION_SYSTEM_PROMPT,
     KNOWLEDGE_GRAPH_SYSTEM_PROMPT,
     OVERALL_ASSESSMENT_SYSTEM_PROMPT,
-    PRE_QUESTION_SYSTEM_PROMPT,
     SEMESTER_REVIEW_SYSTEM_PROMPT,
 )
 from app.services.llm import call_structured
@@ -53,18 +51,6 @@ _KNOWLEDGE_GRAPH_DESCRIPTION_LIMIT = 200
 _KNOWLEDGE_GRAPH_BATCH_THRESHOLD = 120
 # 이만큼 활동이 있는데 링크가 0건이면 응답 편차로 보고 한 번 더 묻는다.
 _KNOWLEDGE_GRAPH_MIN_FOR_RETRY = 20
-
-
-async def generate_pre_questions(
-    interests: dict[str, Any], seteuk_summary: dict[str, Any]
-) -> list[PreQuestion]:
-    user_content = json.dumps(
-        {"current_interests": interests, "seteuk_summary": seteuk_summary}, ensure_ascii=False
-    )
-    result = await call_structured(
-        PRE_QUESTION_SYSTEM_PROMPT, user_content, PreQuestionsResponse
-    )
-    return result.questions[:5]
 
 
 async def extract_interests_from_answers(
@@ -402,6 +388,26 @@ async def run_diagnosis_pipeline(
     OverallAssessmentDraft,
 ]:
     user = await db.get(User, user_id)
+
+    # 학생부를 올리지 않았고 직접 입력한 이전 기록도 없으면 정밀 진단의 근거가
+    # 없다. 이 경우 빈 payload를 DeepSeek에 보내면 실제로 "9학년 게임 개발
+    # 동아리" 같은 사실을 만들어 SWOT를 채우는 문제가 있었다. 상담은 진로 희망을
+    # 출발점으로 계속할 수 있지만, 과거 기록 분석은 비워 두는 것이 정직하다.
+    if not await has_diagnosis_evidence(db, user_id):
+        return (
+            GradesTrend(overall=[]),
+            [],
+            [],
+            [],
+            [],
+            OverallAssessmentDraft(
+                strengths=[],
+                weaknesses=[],
+                opportunities=[],
+                threats=[],
+                headline_comment="",
+            ),
+        )
 
     # AsyncSession은 동시 사용을 지원하지 않으므로, db를 직접 건드리는 조회는
     # 전부 먼저 순차적으로 끝낸다. LLM 호출만 아래에서 병렬로 돌린다.

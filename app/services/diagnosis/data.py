@@ -21,6 +21,28 @@ from app.schemas.diagnosis import (
 _EXCLUDED_COLUMNS = {"id", "user_id", "source_upload_id", "created_at"}
 
 
+async def has_diagnosis_evidence(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    """정밀 진단이 근거로 삼을 과거 기록이 하나라도 있는지 확인한다.
+
+    진로 희망이나 이름은 계획 상담의 출발점일 뿐, 과거 이력을 분석한 SWOT의 근거는
+    아니다. 이 다섯 영역이 모두 비어 있으면 LLM 호출을 건너뛰어, 빈 입력에 그럴듯한
+    학년·활동·약점을 지어내는 일을 구조적으로 막는다.
+    """
+    for model in (
+        AcademicPerformance,
+        ReadingActivity,
+        Activity,
+        Award,
+        VolunteerRecord,
+    ):
+        record_id = await db.scalar(
+            select(model.id).where(model.user_id == user_id).limit(1)
+        )
+        if record_id is not None:
+            return True
+    return False
+
+
 def serialize_row(row: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for column in row.__table__.columns:

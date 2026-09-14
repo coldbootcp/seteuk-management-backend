@@ -11,6 +11,7 @@ tools.py에 삭제 도구를 두지 않아 대화만으로 기록이 사라지�
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -48,6 +49,118 @@ HISTORY_LIMIT = 20
 # 도구 호출 → 결과 → 다시 호출을 몇 번까지 허용할지. 무한 루프 방지용.
 MAX_TOOL_ROUNDS = 4
 TITLE_LIMIT = 60
+
+_GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
+_SIX_SEMESTER_LANGUAGE = re.compile(
+    r"(?:앞으로\s*)?6(?:개)?\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획|구성))?"
+)
+_UNVERIFIED_RECORD_ABSENCE = re.compile(
+    r"(?:학생부|생기부|활동|성적|독서|수상|봉사|저장된\s*(?:과거\s*)?기록).{0,80}"
+    r"(?:전혀\s*)?(?:기록되지\s*않|하나도\s*없|없(?:습니다|어요|다)|확인되지\s*않)",
+    re.IGNORECASE,
+)
+_RECORD_COVERAGE_UNAVAILABLE = {
+    "not_uploaded",
+    "processing",
+    "failed",
+    "awaiting_import",
+}
+_DIRECTION_REASK = re.compile(
+    r"(?:진로|분야).{0,35}(?:정하게\s*된\s*계기|선택한\s*이유|처음\s*정한\s*계기)"
+    r"|(?:왜|어떤\s*계기).{0,35}(?:진로|분야)"
+    r"|(?:어느|어떤)\s*세부\s*(?:영역|분야).{0,25}(?:관심|끌리)",
+    re.IGNORECASE,
+)
+_METHOD_PREFERENCE_REASK = re.compile(
+    r"(?:아니면\s*)?(?:시뮬레이션|실험|발표|보고서|이론|개념\s*정리).{0,90}"
+    r"(?:선호하(?:시)?는|원하(?:시)?는|방식(?:을|이)|형식(?:을|이)).{0,90}"
+    r"(?:알려|말해|답해|선택해).{0,90}(?:\.|\?|$)",
+    re.IGNORECASE,
+)
+_UNVERIFIED_SPECIFIC_COURSE = re.compile(
+    r"(?:국어|영어|수학|물리(?:학)?|화학|생명과학|지구과학|통합과학|정보)\s*[ⅠⅡIVX0-9]+"
+)
+_INTERNAL_DRAFT_RETRY = re.compile(
+    r"(?:설계|계획)\s*(?:저장\s*)?형식이\s*잘못되어\s*다시\s*시도하겠습니다\.?\s*"
+)
+_DRAFT_SAVED_CLAIM = re.compile(r"계획이\s*(?:잘\s*)?저장되었습니다")
+_PREMATURE_DRAFT_CONFIRMATION = re.compile(
+    r"계획\s*초안(?:을|이)[^.!?]{0,80}(?:확정|저장)[^.!?]{0,80}[.!?]\s*"
+)
+
+
+def _period_index(grade: int, semester: int) -> int:
+    return (grade - 1) * 2 + (semester - 1)
+
+
+def filter_consultation_output_for_period(
+    text: str,
+    *,
+    target_grade: int,
+    target_semester: int,
+    school_record_status: str = "imported",
+    has_declared_direction: bool = False,
+    has_current_course_data: bool = True,
+) -> str:
+    """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
+
+    DeepSeek가 프롬프트의 '과거는 회고' 규칙을 무시한 실제 응답이 있었기 때문에,
+    학생에게 보내기 직전에 다시 검사한다. 한 줄에 과거 학기가 들어 있으면 통째로
+    버린다. 과거·현재를 한 줄에 섞어 버린 모델 문장을 보존하는 것보다, 현재와 미래
+    계획만 남기는 편이 안전하다.
+    """
+    current = _period_index(target_grade, target_semester)
+    kept: list[str] = []
+    for line in text.splitlines():
+        periods = _GRADE_PERIOD.findall(line)
+        mentions_past = any(
+            _period_index(int(grade), int(semester or "1")) < current
+            for grade, semester in periods
+        )
+        if not mentions_past:
+            kept.append(line)
+
+    filtered = "\n".join(kept)
+    if current > 0:
+        filtered = _SIX_SEMESTER_LANGUAGE.sub("현재 학기부터 남은 학기", filtered)
+
+    # 이미 저장된 진로·학과·관심 축을 모델이 다시 질문한 실제 응답을 막는다.
+    # 이 필터는 방향이 전혀 없는 학생의 필요한 탐색 질문은 지우지 않는다.
+    if has_declared_direction:
+        filtered = "\n".join(
+            line for line in filtered.splitlines() if not _DIRECTION_REASK.search(line)
+        )
+
+    # 결과물·수행 방식은 학교에 실제 기회가 생긴 뒤 학생이 정할 사항이다. 모델이
+    # 주제 제안 직후 이를 사전 설문처럼 되묻는 문장을 제거한다.
+    filtered = _METHOD_PREFERENCE_REASK.sub("", filtered)
+
+    # 수강 과목이 아직 등록되지 않았는데 특정 교과를 실제 수강 중인 것처럼
+    # 연결한 실제 응답을 막는다. 주제 설명은 보존하고, 확인되지 않은 과목명만
+    # 중립적인 표현으로 바꾼다.
+    if not has_current_course_data:
+        filtered = _UNVERIFIED_SPECIFIC_COURSE.sub("실제 수강 중인 관련 과목", filtered)
+
+    # 초안 도구의 재시도는 모델 내부 처리일 뿐 학생이 볼 오류가 아니다. 또한
+    # 상담 완료 전에는 계획이 확정·저장된 것이 아니므로 표현을 바로잡는다.
+    filtered = _INTERNAL_DRAFT_RETRY.sub("", filtered)
+    filtered = _DRAFT_SAVED_CLAIM.sub("이번 학기 계획 초안을 정리했습니다", filtered)
+    filtered = _PREMATURE_DRAFT_CONFIRMATION.sub("", filtered)
+
+    # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
+    # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를
+    # 제거하고, 확인 범위를 명시한 사실 문장으로 한 번만 바꾼다.
+    if school_record_status in _RECORD_COVERAGE_UNAVAILABLE:
+        lines = filtered.splitlines()
+        kept_lines = [line for line in lines if not _UNVERIFIED_RECORD_ABSENCE.search(line)]
+        if len(kept_lines) != len(lines):
+            filtered = (
+                "학생부가 아직 반영되지 않아 이전 활동의 존재 여부는 확인할 수 없습니다. "
+                "현재 저장된 기록이 비어 있다는 사실만으로 활동이 없었다고 판단하지 않습니다.\n\n"
+                + "\n".join(kept_lines)
+            )
+
+    return re.sub(r"\n{3,}", "\n\n", filtered).strip()
 
 
 async def create_conversation(db: AsyncSession, user_id: uuid.UUID) -> Conversation:
@@ -403,22 +516,42 @@ async def stream_consultation_reply(
                         continue
                     delta = chunk.choices[0].delta
                     if delta.content:
-                        if not round_text and answer_parts:
-                            answer_parts.append("\n\n")
-                            yield _sse("token", {"delta": "\n\n"})
                         round_text.append(delta.content)
-                        yield _sse("token", {"delta": delta.content})
                     if delta.tool_calls:
                         _merge_tool_call_deltas(tool_calls, delta.tool_calls)
 
-                answer_parts.extend(round_text)
+                raw_text = "".join(round_text)
+                visible_text = filter_consultation_output_for_period(
+                    raw_text,
+                    target_grade=session.target_grade,
+                    target_semester=session.target_semester,
+                    school_record_status=context["school_record_coverage"]["status"],
+                    has_declared_direction=bool(
+                        (context.get("memory", {}).get("career_goal") or {}).get("goal")
+                        or context.get("memory", {}).get("target_department")
+                        or context.get("memory", {}).get("interest_keywords")
+                    ),
+                    has_current_course_data=any(
+                        record.get("grade") == session.target_grade
+                        and record.get("semester") == session.target_semester
+                        for record in context.get("academic_performance", [])
+                    ),
+                )
+                if visible_text:
+                    if answer_parts:
+                        answer_parts.append("\n\n")
+                        yield _sse("token", {"delta": "\n\n"})
+                    answer_parts.append(visible_text)
+                    yield _sse("token", {"delta": visible_text})
                 if not tool_calls:
                     break
 
                 llm_messages.append(
                     {
                         "role": "assistant",
-                        "content": "".join(round_text) or None,
+                        # 모델의 다음 도구 호출 문맥은 원문을 보존한다. 화면·저장용
+                        # 문장만 학기 규칙 필터를 거친다.
+                        "content": raw_text or None,
                         "tool_calls": [
                             {
                                 "id": call["id"],
