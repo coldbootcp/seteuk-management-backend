@@ -5,7 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_consultation_satisfied
+from app.core.dependencies import (
+    get_active_verified_user,
+    get_current_user,
+    require_consultation_satisfied,
+)
 from app.core.exceptions import RoadmapNotFoundError
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
@@ -26,7 +30,9 @@ from app.schemas.roadmap import (
 from app.services import plan_service, roadmap_service
 
 router = APIRouter(
-    prefix="/roadmaps", tags=["roadmaps"], dependencies=[Depends(require_consultation_satisfied)]
+    prefix="/roadmaps",
+    tags=["roadmaps"],
+    dependencies=[Depends(get_active_verified_user), Depends(require_consultation_satisfied)],
 )
 
 

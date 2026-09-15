@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.consultation import ConsultationSession, ConsultationStatus
@@ -47,7 +47,7 @@ async def get_status(
 
 @router.post("/sessions", response_model=ConsultationSessionRead)
 async def create_or_resume_session(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_active_verified_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_or_create_session(db, user)
@@ -57,7 +57,7 @@ async def create_or_resume_session(
 @router.get("/sessions/{session_id}", response_model=ConsultationSessionRead)
 async def get_session(
     session_id: uuid.UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_active_verified_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_session(db, user.id, session_id)
@@ -68,7 +68,7 @@ async def get_session(
 async def send_message(
     session_id: uuid.UUID,
     data: ConsultationMessageCreate,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_active_verified_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StreamingResponse:
     await consultation_service.get_session(db, user.id, session_id)
@@ -84,7 +84,7 @@ async def send_message(
 async def confirm_full_replan(
     session_id: uuid.UUID,
     data: ConfirmFullReplanRequest,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_active_verified_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.confirm_full_replan(
@@ -96,7 +96,7 @@ async def confirm_full_replan(
 @router.post("/sessions/{session_id}/conclude", response_model=ConsultationSessionRead)
 async def conclude_session(
     session_id: uuid.UUID,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_active_verified_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_session(db, user.id, session_id)

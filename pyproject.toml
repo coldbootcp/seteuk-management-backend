@@ -43,6 +43,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.per-file-ignores]
 # LLM prompt bodies are long-form Korean text, not code — line length doesn't apply.
 "app/services/parser/prompts.py" = ["E501"]
+# HTML email templates read better as whole tags/style attributes on one line
+# than force-wrapped — line length doesn't apply.
+"app/services/email_service.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

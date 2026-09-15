@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import RateLimitedError
+from app.models.auth_rate_limit_event import AuthRateLimitEvent
 from app.models.usage_event import UsageAction, UsageEvent
 from app.services.korean_text import with_particle
 
@@ -84,4 +85,34 @@ async def enforce_daily_limit(
         )
 
     db.add(UsageEvent(user_id=user_id, action=action.value))
+    await db.commit()
+
+
+async def enforce_auth_rate_limit(
+    db: AsyncSession, key: str, action: str, limit: int, window: timedelta
+) -> None:
+    """로그인 전 엔드포인트(가입/로그인/비밀번호 재설정 등)의 짧은 윈도우
+    남용 방지. user_id가 없는 상태(존재하지 않는 이메일, 아직 로그인 전인
+    IP)에서도 걸 수 있도록 임의 문자열 키로 센다. `enforce_daily_limit`과
+    같은 이유로 개발 환경(local 등)에서는 기본적으로 꺼둔다."""
+    if not rate_limiting_enabled():
+        db.add(AuthRateLimitEvent(key=key, action=action))
+        await db.commit()
+        return
+
+    since = datetime.now(UTC) - window
+    used = await db.scalar(
+        select(func.count())
+        .select_from(AuthRateLimitEvent)
+        .where(
+            AuthRateLimitEvent.key == key,
+            AuthRateLimitEvent.action == action,
+            AuthRateLimitEvent.created_at >= since,
+        )
+    ) or 0
+
+    if used >= limit:
+        raise RateLimitedError("잠시 후 다시 시도해주세요")
+
+    db.add(AuthRateLimitEvent(key=key, action=action))
     await db.commit()

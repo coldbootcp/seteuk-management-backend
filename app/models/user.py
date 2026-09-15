@@ -17,6 +17,19 @@ class User(Base):
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # 비밀번호 계정만 검증이 필요하다 — 구글/카카오는 제공자가 이미 이메일 소유를
+    # 확인했으므로 로그인 시 이 값과 무관하게 통과한다.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    google_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    # 회원 탈퇴 요청 시각. 즉시 삭제하지 않고 유예 기간(30일) 뒤 배치로 완전
+    # 삭제한다 — 나중에 결제 기능이 생기면 거래기록 보관 의무와 맞물릴 수 있어,
+    # 지금부터 "요청 시점"을 남겨 두는 구조로 만들어 둔다. 이 값이 있으면
+    # 로그인 자체는 되지만 앱 사용은 막고 탈퇴 취소만 허용한다.
+    withdrawal_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Identity data, not an "opinion" that evolves — unlike student_interests, no history.
     name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Current factual status, not a subjective answer — kept separate from

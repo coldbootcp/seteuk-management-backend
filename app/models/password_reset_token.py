@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -9,12 +9,12 @@ from sqlalchemy.sql import func
 from app.db.base import Base
 
 
-class RefreshToken(Base):
-    """발급된 refresh 토큰 한 건. id가 곧 JWT의 jti라서, 로그아웃하면 여기에
-    revoked_at을 찍는 것만으로 그 토큰이 즉시 무효가 된다 — 이 테이블이 없으면
-    로그아웃은 클라이언트가 토큰을 버리는 시늉일 뿐이다."""
+class PasswordResetToken(Base):
+    """비밀번호 재설정 링크 토큰 한 건. 토큰 원문은 저장하지 않고 SHA-256
+    해시만 남긴다(OWASP Forgot Password Cheat Sheet) — 짧은 만료(1시간),
+    단일 사용(used_at)을 여기서 강제한다."""
 
-    __tablename__ = "refresh_tokens"
+    __tablename__ = "password_reset_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -22,8 +22,9 @@ class RefreshToken(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import UnaryExpression
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.base import Base
 from app.db.session import get_db
@@ -110,7 +110,7 @@ def build_record_router(
     before_create: Callable[[AsyncSession, User, BaseModel], Awaitable[None]] | None = None,
     before_update: Callable[[AsyncSession, User, BaseModel], Awaitable[None]] | None = None,
 ) -> APIRouter:
-    router = APIRouter(prefix=prefix, tags=[tag])
+    router = APIRouter(prefix=prefix, tags=[tag], dependencies=[Depends(get_active_verified_user)])
 
     @router.get("", response_model=ListResponse[read_schema])
     async def list_records(

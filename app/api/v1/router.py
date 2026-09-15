@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.account import router as account_router
 from app.api.v1.admission_catalog import router as admission_catalog_router
 from app.api.v1.application_preparations import router as application_preparations_router
 from app.api.v1.attachments import router as attachments_router
@@ -17,6 +18,7 @@ from app.api.v1.seteuk import router as seteuk_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
+api_router.include_router(account_router)
 api_router.include_router(admission_catalog_router)
 api_router.include_router(application_preparations_router)
 api_router.include_router(seteuk_router)

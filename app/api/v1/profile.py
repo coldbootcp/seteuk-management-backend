@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.usage_event import UsageAction
@@ -18,7 +18,9 @@ from app.schemas.profile import (
 )
 from app.services import profile_service
 
-router = APIRouter(prefix="/profile", tags=["profile"])
+router = APIRouter(
+    prefix="/profile", tags=["profile"], dependencies=[Depends(get_active_verified_user)]
+)
 
 
 @router.post("", response_model=ProfileResponse)

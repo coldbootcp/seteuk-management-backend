@@ -49,7 +49,7 @@ class Roadmap(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     career_track: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -80,7 +80,7 @@ class RoadmapNode(Base):
         UUID(as_uuid=True), ForeignKey("roadmaps.id", ondelete="CASCADE"), nullable=False
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
     grade: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -125,7 +125,7 @@ class RoadmapPlanEvent(Base):
         UUID(as_uuid=True), ForeignKey("roadmap_nodes.id", ondelete="CASCADE"), nullable=False
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # 노드 안에서 읽는 순서. 같은 달에 여러 주제가 몰리므로 이게 없으면 목록
     # 순서가 요청마다 뒤바뀐다.
@@ -155,7 +155,7 @@ class ReconciliationLog(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # MISS는 활동 없이 발생하는 체크포인트 이벤트라 activity_id가 비어 있을 수 있다.
     activity_id: Mapped[uuid.UUID | None] = mapped_column(

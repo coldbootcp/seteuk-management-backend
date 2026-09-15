@@ -14,7 +14,7 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.db.session import AsyncSessionLocal
-from app.services.maintenance_service import fail_stale_jobs
+from app.services.maintenance_service import fail_stale_jobs, purge_stale_withdrawals
 
 settings = get_settings()
 configure_logging()
@@ -35,6 +35,7 @@ if settings.sentry_dsn:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await fail_stale_jobs()
+    await purge_stale_withdrawals()
     yield
 
 

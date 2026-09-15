@@ -6,7 +6,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_consultation_satisfied
+from app.core.dependencies import (
+    get_active_verified_user,
+    get_current_user,
+    require_consultation_satisfied,
+)
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.conversation import Conversation
@@ -19,7 +23,7 @@ from app.services import chat_service, record_service
 router = APIRouter(
     prefix="/conversations",
     tags=["conversations"],
-    dependencies=[Depends(require_consultation_satisfied)],
+    dependencies=[Depends(get_active_verified_user), Depends(require_consultation_satisfied)],
 )
 
 

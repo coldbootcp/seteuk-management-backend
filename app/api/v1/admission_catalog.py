@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.db.session import get_db
 from app.models.admission_catalog import AdmissionProgram, AdmissionTrack, University
 from app.models.admission_program_reference import (
@@ -46,7 +46,11 @@ from app.services.admission_research_service import get_admission_research
 from app.services.snu_admission_service import get_snu_2027_susi_detail
 from app.services.writing_requirement_service import get_or_inspect_status
 
-router = APIRouter(prefix="/admission-catalog", tags=["admission-catalog"])
+router = APIRouter(
+    prefix="/admission-catalog",
+    tags=["admission-catalog"],
+    dependencies=[Depends(get_active_verified_user)],
+)
 
 
 @router.get("/universities", response_model=list[UniversitySearchRead])

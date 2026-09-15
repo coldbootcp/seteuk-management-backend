@@ -16,9 +16,26 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     kakao_client_id: str | None = None
     kakao_client_secret: str | None = None
+    # 카카오와 완전히 같은 패턴 — 클라이언트가 Google OAuth2 access token만
+    # 받아 넘기고, 백엔드는 그 토큰으로 구글 userinfo API를 직접 불러 신원을
+    # 확인한다. 이 값은 클라이언트 SDK 설정용이라 서버 동작에는 필수가 아니다.
+    google_client_id: str | None = None
     sentry_dsn: str | None = None
     sentry_traces_sample_rate: float = 0.1
     environment: str = "local"
+
+    # --- 이메일 발송 (Resend) ---
+    resend_api_key: str | None = None
+    # Resend에 검증된 발신 도메인의 주소여야 한다. 비워 두면(로컬 개발 등)
+    # 이메일을 실제로 보내지 않고 로그로만 남긴다 — 카카오 버튼이 키 없으면
+    # '준비 중'으로 빠지는 것과 같은 자세.
+    email_from: str = "세특연구소 <onboarding@resend.dev>"
+    # 인증·재설정 링크가 가리킬 프론트엔드 주소. 백엔드와 다른 오리진에서 돈다.
+    frontend_base_url: str = "http://localhost:3100"
+    email_verification_token_expire_hours: int = 24
+    password_reset_token_expire_minutes: int = 60
+    # 탈퇴 요청 후 완전 삭제까지의 유예 기간.
+    account_deletion_grace_days: int = 30
 
     log_level: str = "INFO"
     # 운영에서는 JSON 한 줄, 로컬에서는 사람이 읽는 출력.

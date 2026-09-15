@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.usage_event import UsageAction
@@ -20,7 +20,9 @@ from app.schemas.seteuk import (
 )
 from app.services import seteuk_service
 
-router = APIRouter(prefix="/seteuk", tags=["seteuk"])
+router = APIRouter(
+    prefix="/seteuk", tags=["seteuk"], dependencies=[Depends(get_active_verified_user)]
+)
 
 
 @router.post("/uploads", response_model=UploadCreateResponse, status_code=status.HTTP_201_CREATED)

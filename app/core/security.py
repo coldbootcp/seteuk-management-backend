@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
@@ -10,6 +12,34 @@ from app.core.config import get_settings
 from app.core.exceptions import InvalidTokenError
 
 settings = get_settings()
+
+# 최소 8자 이상, 영문/숫자 각 1개 이상. 특수문자를 강제하지 않는 이유는 NIST
+# SP 800-63B가 복잡성 규칙보다 길이를 우선하라고 권고하기 때문 — 지나친 규칙은
+# 사용자가 예측 가능한 패턴("Password1!")으로 우회하게 만든다.
+MIN_PASSWORD_LENGTH = 8
+
+
+def validate_password_strength(password: str) -> str | None:
+    """문제가 있으면 사용자에게 보여줄 한국어 메시지를, 없으면 None을 돌려준다."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"비밀번호는 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다"
+    if not any(char.isalpha() for char in password):
+        return "비밀번호에 영문자를 포함해주세요"
+    if not any(char.isdigit() for char in password):
+        return "비밀번호에 숫자를 포함해주세요"
+    return None
+
+
+def generate_opaque_token() -> tuple[str, str]:
+    """(원문, 해시) 쌍을 돌려준다. 원문은 이메일로만 나가고 DB에는 해시만
+    남긴다 — DB가 유출돼도 토큰을 재현할 수 없게 하기 위함(OWASP Forgot
+    Password Cheat Sheet)."""
+    raw = secrets.token_urlsafe(32)
+    return raw, hash_opaque_token(raw)
+
+
+def hash_opaque_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 class TokenType(StrEnum):

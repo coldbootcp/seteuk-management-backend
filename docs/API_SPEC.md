@@ -119,8 +119,13 @@ Base URL: `/api/v1`
 ```json
 { "email": "student@example.com", "password": "string" }
 ```
+비밀번호는 8자 이상 + 영문/숫자 포함이어야 한다(`WEAK_PASSWORD`). 가입 즉시 토큰을
+내려주지만(로그인은 된다) **이메일 인증을 마치기 전에는 일반 기능(6개 탭·진단·챗봇·
+로드맵 등)이 `EMAIL_NOT_VERIFIED`(403)로 막힌다** — 관문 판정은 `GET /account/status`로
+확인한다. IP당 시간 10회로 제한된다(`RATE_LIMITED`).
 
 **POST /auth/login** → 200 `{ access_token, refresh_token }`
+이메일·IP별로 15분 윈도우 제한이 있다(`RATE_LIMITED`).
 
 **POST /auth/social/kakao** → 200 `{ access_token, refresh_token, is_new_user }`
 ```json
@@ -128,7 +133,16 @@ Base URL: `/api/v1`
 ```
 클라이언트가 카카오 SDK로 받은 access token을 보내면 서버가 카카오 API로 검증한다.
 이미 같은 이메일로 가입된 계정이 있으면 새 계정을 만들지 않고 연결한다. 이메일 제공에
-동의하지 않은 사용자도 가입된다.
+동의하지 않은 사용자도 가입된다. 이메일이 확인되면 그 계정의 이메일 인증도 함께
+완료 처리된다.
+
+**POST /auth/social/google** → 200 `{ access_token, refresh_token, is_new_user }`
+```json
+{ "google_access_token": "string" }
+```
+카카오와 완전히 같은 패턴 — 클라이언트가 Google Identity Services의 OAuth2 토큰
+클라이언트로 받은 access token을 보내면 서버가 구글 userinfo API로 직접 검증한다.
+이메일 인증도 함께 완료 처리된다.
 
 **POST /auth/refresh** → 200 `{ access_token }`
 ```json
@@ -141,6 +155,62 @@ Base URL: `/api/v1`
 ```
 해당 refresh 토큰만 무효화한다(다른 기기 세션은 유지). 이미 무효화된 토큰으로 다시
 호출해도 204다.
+
+**POST /auth/verify-email** → 200 `{ message }`
+```json
+{ "token": "string" }
+```
+가입 시 발송된 인증 메일의 링크 토큰을 검증한다. 토큰은 단일 사용이며 만료 시간이
+있다(`INVALID_VERIFICATION_TOKEN`).
+
+**POST /auth/resend-verification** → 200 `{ message }`
+```json
+{ "email": "string" }
+```
+이메일 존재 여부를 노출하지 않기 위해 계정이 없거나 이미 인증된 경우에도 같은
+메시지를 돌려준다. 시간당 3회로 제한된다.
+
+**POST /auth/password/forgot** → 200 `{ message }`
+```json
+{ "email": "string" }
+```
+비밀번호 재설정 메일 발송을 요청한다. 위와 같은 이유로 항상 같은 메시지를 돌려준다.
+
+**POST /auth/password/reset** → 200 `{ message }`
+```json
+{ "token": "string", "new_password": "string" }
+```
+토큰은 단일 사용·시간 제한(기본 60분)이다(`INVALID_RESET_TOKEN`). 성공하면 그 계정의
+다른 모든 기기 세션(refresh 토큰)이 함께 무효화된다.
+
+### 3.1.1 계정 관리
+
+**GET /account/status** → 200
+```json
+{
+  "email": "string",
+  "email_verified": true,
+  "has_password": true,
+  "google_linked": false,
+  "kakao_linked": false,
+  "withdrawal_requested_at": null,
+  "scheduled_deletion_at": null
+}
+```
+이메일 인증·탈퇴 유예 여부와 무관하게 항상 호출할 수 있다 — 막힌 계정이 스스로
+상태를 확인할 수 있어야 하기 때문이다.
+
+**POST /account/withdraw** → 200 (위와 같은 모양)
+```json
+{ "password": "string | null" }
+```
+비밀번호 계정은 재확인을 요구한다(`INVALID_CREDENTIALS`). 요청 즉시 다른 모든 세션이
+무효화되고, 이후 일반 기능은 `ACCOUNT_PENDING_DELETION`(403)으로 막힌다.
+`ACCOUNT_DELETION_GRACE_DAYS`(기본 30일) 뒤 배치로 계정과 모든 데이터가 완전히
+삭제된다(users FK가 전부 `ON DELETE CASCADE`).
+
+**POST /account/cancel-withdrawal** → 200 (위와 같은 모양)
+유예 기간 안에 탈퇴 의사를 철회한다.
 
 ### 3.2 생기부 파서
 

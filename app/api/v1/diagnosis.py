@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.usage_event import UsageAction
@@ -18,7 +18,9 @@ from app.schemas.diagnosis import (
 from app.services import diagnosis_service
 from app.services.diagnosis.data import has_diagnosis_evidence
 
-router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
+router = APIRouter(
+    prefix="/diagnosis", tags=["diagnosis"], dependencies=[Depends(get_active_verified_user)]
+)
 
 
 @router.get("/pre-questions", response_model=PreQuestionsResponse)

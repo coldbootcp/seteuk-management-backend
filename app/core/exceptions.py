@@ -133,3 +133,30 @@ class ConsultationNotReadyError(AppError):
 
     status_code = 409
     error_code = "CONSULTATION_NOT_READY"
+
+
+class EmailNotVerifiedError(AppError):
+    status_code = 403
+    error_code = "EMAIL_NOT_VERIFIED"
+
+
+class WeakPasswordError(AppError):
+    status_code = 422
+    error_code = "WEAK_PASSWORD"
+
+
+class InvalidResetTokenError(AppError):
+    status_code = 400
+    error_code = "INVALID_RESET_TOKEN"
+
+
+class InvalidVerificationTokenError(AppError):
+    status_code = 400
+    error_code = "INVALID_VERIFICATION_TOKEN"
+
+
+class AccountPendingDeletionError(AppError):
+    """탈퇴 유예 기간 중인 계정이 일반 기능을 쓰려 할 때."""
+
+    status_code = 403
+    error_code = "ACCOUNT_PENDING_DELETION"

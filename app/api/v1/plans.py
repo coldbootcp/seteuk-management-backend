@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, require_consultation_satisfied
+from app.core.dependencies import (
+    get_active_verified_user,
+    get_current_user,
+    require_consultation_satisfied,
+)
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
 from app.models.plan_item import PlanItem
@@ -25,7 +29,9 @@ from app.schemas.records import ListResponse
 from app.services import plan_service, record_service
 
 router = APIRouter(
-    prefix="/plans", tags=["plans"], dependencies=[Depends(require_consultation_satisfied)]
+    prefix="/plans",
+    tags=["plans"],
+    dependencies=[Depends(get_active_verified_user), Depends(require_consultation_satisfied)],
 )
 
 

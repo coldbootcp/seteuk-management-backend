@@ -16,7 +16,7 @@ class Attendance(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Null means this row was entered some other way (e.g. manual edit in a future
     # tab-management API), not parsed from a 생기부 upload — re-uploading only

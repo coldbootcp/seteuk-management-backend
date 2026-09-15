@@ -228,6 +228,60 @@ docs/
   제품 판단으로 남김. (3) 챗봇의 마크다운 응답(표·굵게 등)이 채팅 말풍선에 원문
   그대로 찍힌다(렌더러 없음) — 기존 일반 챗봇 화면도 같은 한계.
 
+- [x] **인증 하드닝 — 구글 로그인, 이메일 인증, 비밀번호 재설정, 회원 탈퇴** — "구글
+  로그인·이메일 회원가입을 배포 가능한 프로덕트로 완성해달라"는 요청에 따라 OWASP
+  Authentication/Forgot Password Cheat Sheet와 Google의 Sign-in-with-Google 모범
+  사례를 조사한 뒤 구현함. **구글 로그인은 ID 토큰 검증이 아니라 카카오와 완전히 같은
+  패턴**(client가 OAuth2 access token만 넘기고 서버가 `userinfo` API를 직접 불러
+  신원 확인)으로 설계함 — 처음에는 Google Identity Services의 ID-token 방식(`google-auth`
+  라이브러리, `verify_oauth2_token`)으로 구현했으나, 커스텀 버튼(카카오 버튼과 같은
+  스타일)을 쓰려면 GIS의 `renderButton`이 아니라 OAuth2 토큰 클라이언트
+  (`initTokenClient`)가 필요했고, 그러면 애초에 ID 토큰이 아니라 access token이
+  나오므로 카카오와 같은 검증 방식으로 통일함(의존성도 줄어 `google-auth`/`requests`를
+  다시 뺌). `users`에 `google_id`(unique)·`email_verified_at`·`withdrawal_requested_at`
+  추가. **이메일 인증**: 가입 시 SHA-256 해시로만 저장되는 1회용 토큰을 발급해
+  Resend로 링크 메일을 보내고(`email_verification_tokens`), 비밀번호 계정은 인증
+  전까지 로그인은 되지만 새 의존성 `get_active_verified_user`(라우터 단위로
+  건다 — `roadmaps`/`plans`/`recommendations`/`conversations`는 기존
+  `require_consultation_satisfied`와 나란히, `consultation.py`는 `get_status`만
+  예외로 남기고 나머지 액션에 개별 적용)에 막혀 실제 기능을 못 쓴다. 소셜 로그인은
+  제공자가 이미 이메일을 확인했으므로 연결·생성 즉시 인증 완료 처리됨. **비밀번호
+  재설정**도 같은 해시-토큰 패턴(`password_reset_tokens`, 60분 만료, 단일 사용)이며
+  성공 시 그 계정의 다른 모든 세션(refresh 토큰)을 함께 무효화함. **회원 탈퇴**는
+  즉시 하드 삭제가 아니라 **30일 유예 후 삭제**로 설계함(소유자 결정 — 지금은
+  결제 기능이 없어 즉시 삭제가 개인정보보호법 원칙에 더 맞지만, 나중에 결제가
+  생기면 거래기록 보관 의무와 맞물릴 수 있어 미리 유예 구조로 만들어 둠).
+  `POST /account/withdraw`는 비밀번호 계정에 재확인을 요구하고 즉시 전 세션을
+  끊은 뒤 `withdrawal_requested_at`을 찍는다 — 이후 `get_active_verified_user`가
+  일반 기능을 막지만 `GET /account/status`·`POST /account/cancel-withdrawal`은
+  (이메일 인증 관문과 같은 이유로) 이 관문 밖에 둬 스스로 상태 확인·탈퇴 취소는
+  항상 가능하다. 완전 삭제는 기동 시 한 번 도는 `purge_stale_withdrawals`(좀비
+  job 정리와 같은 패턴)가 맡는다. **이 삭제를 안전하게 만들기 위해 `users.id`를
+  참조하는 FK 22곳 전부에 `ON DELETE CASCADE`를 추가함**(대부분 없었다 — 이전에는
+  테스트 계정 하나를 지우려 해도 FK 위반이 났을 것) — 하위 테이블들은 이미 대부분
+  `ON DELETE CASCADE`/`SET NULL`로 정리돼 있어서 `users` 행 하나만 지우면 활동·
+  성적·대화 등 전 도메인이 DB 레벨에서 함께 지워지는 것을 실제 psql로 직접
+  확인함. **가입 시 비밀번호 강도 검증이 서버에는 전혀 없었다는 것도 이번에 발견**
+  (프론트 `minLength=8`만 있었고 API를 직접 두드리면 빈 문자열도 통과했다) —
+  `validate_password_strength`(8자 이상 + 영문·숫자 포함, NIST SP 800-63B 권고대로
+  특수문자는 강제하지 않음)를 Pydantic validator로 추가. 로그인 전 엔드포인트(가입·
+  로그인·비밀번호 재설정 요청·인증 메일 재발송)는 사용자 단위가 아니라 IP·이메일
+  문자열 키로 세는 새 짧은-윈도우 리미터(`enforce_auth_rate_limit`,
+  `auth_rate_limit_events`)로 무차별 대입을 늦추고, 이메일 존재 여부가 응답 모양으로
+  새지 않도록(OWASP User Enumeration) 재발송·비밀번호 찾기는 계정 존재와 무관하게
+  항상 같은 메시지를 돌려줌. 프론트엔드는 `/verify-email`·`/reset-password` 정적
+  라우트, 로그인 화면의 실제 구글 버튼·비밀번호 찾기 폼, 워크스페이스 최상위에
+  이메일 인증 관문(`EmailVerificationGate`)·탈퇴 유예 관문(`WithdrawalPendingGate`)을
+  진단+상담 관문보다 먼저 추가함(순서: 로그인 → 이메일 인증 → 탈퇴 유예 → 진단+상담
+  → 온보딩/워크스페이스), 프로필 설정 탭에 로그인 수단 표시와 탈퇴 버튼(`AccountSection`)도
+  추가함. `/terms`·`/privacy` 정적 페이지 초안도 만들었으나 **사업자명·대표자·
+  사업자등록번호·개인정보보호책임자 연락처는 실제 값을 모르므로 대괄호 placeholder로
+  남겨 뒀다** — 배포 전 실제 정보로 채우고 가능하면 법률 검토를 받을 것.
+  **아직 검증 못한 것**: 실제 Google OAuth 클라이언트 ID와 Resend API 키를 발급받지
+  못해, 소셜 로그인·실제 메일 발송은 로컬에서 실 키로 E2E 검증하지 못했다(mock으로
+  경계만 테스트함) — 발급받는 대로 실 키 검증이 필요하다(파서·진단 때처럼 모킹
+  테스트만으로는 직렬화·실제 응답 형태 문제를 못 잡을 수 있다).
+
 ## 알려진 한계 / 다음에 손볼 것
 
 - **비동기 job이 FastAPI BackgroundTasks에 묶여 있다.** 파싱·진단이 API 프로세스와 생사를 같이 하므로 배포 때마다 진행 중 job이 죽는다(기동 시 실패 처리로 사용자 경험만 막아둔 상태). 트래픽이 늘면 워커 큐(Celery/ARQ 등)로 분리해야 한다.
@@ -243,6 +297,5 @@ docs/
   `grades_trend`·`activity_inventory`·`knowledge_graph_links`·`opportunities`가
   계산만 되고 프론트엔드가 호출하지 않는다. UI 제약이 해제됐으므로 이제 붙이면 된다 —
   진단 파이프라인이 만드는 것의 절반 이상이 화면에 안 나오는 셈이다.
-- 두 저장소 모두 아직 `main`에 머지되지 않았다. 백엔드 `feat/planning-chatbot-recommendations`
-  (PR #1)와 프론트엔드 `feat/backend-integration`(PR #1)은 서로 의존하므로 **함께**
-  머지해야 한다.
+- ~~두 저장소 모두 아직 `main`에 머지되지 않았다~~ (해결됨 — 둘 다 `main`에 머지 완료,
+  이제 이 저장소는 `main`에서 바로 작업한다).

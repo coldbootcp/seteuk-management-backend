@@ -15,10 +15,25 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.seteuk_upload import SeteukUpload, UploadStatus
+from app.services import auth_service
 
 logger = structlog.get_logger()
 
 FAILURE_REASON = "서버가 재시작되어 작업이 중단되었습니다. 다시 시도해주세요."
+
+
+async def purge_stale_withdrawals() -> int:
+    """탈퇴 유예 기간이 지난 계정을 완전히 삭제한다. 별도 워커 큐가 없으므로
+    (CLAUDE.md 잔여 과제) 좀비 job 정리와 같은 패턴으로 기동 시 한 번 돈다 —
+    트래픽이 늘면 주기적 스케줄러로 옮겨야 정확한 30일 시점에 삭제된다."""
+    settings = get_settings()
+    async with AsyncSessionLocal() as db:
+        count = await auth_service.purge_withdrawn_accounts(
+            db, settings.account_deletion_grace_days
+        )
+    if count:
+        logger.info("purged withdrawn accounts", count=count)
+    return count
 
 
 async def fail_stale_jobs() -> int:
