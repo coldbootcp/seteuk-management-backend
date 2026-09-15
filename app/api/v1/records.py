@@ -22,6 +22,7 @@ from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
 from app.models.award import Award
+from app.models.calendar_event import CalendarEvent
 from app.models.reading_activity import ReadingActivity
 from app.models.usage_event import UsageAction
 from app.models.user import User
@@ -40,6 +41,9 @@ from app.schemas.records import (
     AwardCreate,
     AwardRead,
     AwardUpdate,
+    CalendarEventCreate,
+    CalendarEventRead,
+    CalendarEventUpdate,
     ListResponse,
     ReadingActivityCreate,
     ReadingActivityRead,
@@ -94,6 +98,10 @@ class ActivityFilters(Pagination):
     activity_category: str | None = None
     activity_type: str | None = None
     subject: str | None = None
+
+
+class CalendarEventFilters(Pagination):
+    event_type: str | None = None
 
 
 def build_record_router(
@@ -259,6 +267,17 @@ volunteer_record_router = build_record_router(
     order_by=lambda: [VolunteerRecord.grade.asc(), VolunteerRecord.date.asc().nullslast()],
 )
 
+calendar_event_router = build_record_router(
+    prefix="/calendar-events",
+    tag="calendar-events",
+    model=CalendarEvent,
+    create_schema=CalendarEventCreate,
+    update_schema=CalendarEventUpdate,
+    read_schema=CalendarEventRead,
+    filter_schema=CalendarEventFilters,
+    order_by=lambda: [CalendarEvent.start_date.asc()],
+)
+
 async def _reconcile_new_activity(db: AsyncSession, user: User, row: Any) -> None:
     """활동을 저장하면 곧바로 활성 로드맵과 대조한다. 로드맵이 없으면 조용히 넘어간다 —
     로드맵을 만들기 전에 기록부터 쌓는 것을 막을 이유가 없다."""
@@ -301,6 +320,7 @@ record_routers = [
     award_router,
     volunteer_record_router,
     activity_router,
+    calendar_event_router,
 ]
 
 

@@ -520,6 +520,25 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 검증한다. 화면을 우회한 요청도 5등급제 대상자에게 6~9등급을 저장할 수 없으며,
 정책이 아직 판별되지 않으면 원문 보존을 위해 1~9등급 숫자만 허용한다.
 
+### 3.5.1 캘린더 — 시험/수행평가 기간 `/calendar-events`
+
+위 6개와 같은 CRUD 패턴(GET/POST/GET-1/PATCH/DELETE)이지만, 생기부에서 파싱되는
+"이미 일어난 일"이 아니라 학생이 직접 적어 두는 "앞으로 있을 일"이라
+`source_upload_id`가 없다.
+
+```json
+{
+  "event_type": "시험 | 수행평가 | 기타",
+  "title": "string",
+  "subject": "string | null",
+  "start_date": "YYYY-MM-DD",
+  "end_date": "YYYY-MM-DD",
+  "memo": "string | null"
+}
+```
+
+필터: `event_type`. `end_date`가 `start_date`보다 빠르면 422(`VALIDATION_ERROR`).
+
 > 주의: 생기부에서 파싱된 행을 PATCH로 고친 뒤 생기부를 다시 업로드하면 그 수정은
 > 새 파싱 결과로 교체된다. 유지되어야 하는 보정이라면 직접 입력 행으로 다시 만들 것.
 

@@ -12,9 +12,10 @@ import uuid
 from datetime import date as date_type
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.activity import ActivityCategory, ActivityType
+from app.models.calendar_event import CalendarEventType
 
 
 class ListResponse[T](BaseModel):
@@ -279,3 +280,43 @@ class ActivityLineageNode(BaseModel):
 
 class ActivityLineageResponse(BaseModel):
     nodes: list[ActivityLineageNode]
+
+
+# --- 캘린더 일정(시험·수행평가 기간) -------------------------------------
+
+
+class CalendarEventCreate(BaseModel):
+    event_type: CalendarEventType
+    title: str = Field(min_length=1, max_length=200)
+    subject: str | None = None
+    start_date: date_type
+    end_date: date_type
+    memo: str | None = None
+
+    @model_validator(mode="after")
+    def _check_date_range(self) -> "CalendarEventCreate":
+        if self.end_date < self.start_date:
+            raise ValueError("종료일은 시작일보다 빠를 수 없습니다")
+        return self
+
+
+class CalendarEventUpdate(BaseModel):
+    event_type: CalendarEventType | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    subject: str | None = None
+    start_date: date_type | None = None
+    end_date: date_type | None = None
+    memo: str | None = None
+
+
+class CalendarEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    event_type: CalendarEventType
+    title: str
+    subject: str | None
+    start_date: date_type
+    end_date: date_type
+    memo: str | None
+    created_at: datetime

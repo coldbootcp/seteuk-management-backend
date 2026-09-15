@@ -22,6 +22,7 @@ from app.models import admission_writing_source_document as _admission_writing_s
 from app.models import application_preparation as _application_preparation  # noqa: E402, F401
 from app.models import attendance as _attendance  # noqa: E402, F401
 from app.models import auth_rate_limit_event as _auth_rate_limit_event  # noqa: E402, F401
+from app.models import calendar_event as _calendar_event  # noqa: E402, F401
 from app.models import award as _award  # noqa: E402, F401
 from app.models import consultation as _consultation  # noqa: E402, F401
 from app.models import conversation as _conversation  # noqa: E402, F401
