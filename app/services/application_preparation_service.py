@@ -245,6 +245,11 @@ async def update_preparation(
     )
     for evidence in existing:
         await db.delete(evidence)
+    # 삭제와 삽입이 같은 (preparation_id, activity_id) 쌍을 다시 쓰는 경우(같은 근거를
+    # 다시 저장하는 흔한 경로)가 많다. flush 없이 커밋하면 SQLAlchemy가 이 삭제-삽입
+    # 묶음 안에서 삽입을 삭제보다 먼저 내보낼 수 있어 uq_application_evidence_activity
+    # 위반이 난다.
+    await db.flush()
     for item in data.evidence:
         db.add(ApplicationEvidence(preparation_id=entry.id, **item.model_dump()))
     await db.commit()
