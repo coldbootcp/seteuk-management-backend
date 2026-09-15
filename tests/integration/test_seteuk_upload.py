@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 
 import pytest
 from httpx import AsyncClient
@@ -18,6 +19,7 @@ from app.schemas.seteuk import (
     AttendanceItem,
     AwardItem,
     SeteukAnalysisResult,
+    VolunteerRecordItem,
 )
 from tests.conftest import TestSessionLocal
 
@@ -211,13 +213,11 @@ async def test_other_user_cannot_access_upload(
     assert response.json()["error_code"] == "UPLOAD_NOT_FOUND"
 
 
-FAKE_RESULT_WITH_FUTURE_GRADE_DATA = SeteukAnalysisResult(
+FAKE_RESULT_WITH_FUTURE_SEMESTER_DATA = SeteukAnalysisResult(
     academic_performance=[
         AcademicPerformanceItem(grade=2, semester=1, category="수학", subject="수학Ⅰ"),
         # 현재(2학년 1학기)와 같은 학년의 이후 학기 — 걸러져야 한다.
         AcademicPerformanceItem(grade=2, semester=2, category="수학", subject="수학Ⅱ"),
-        # 현재보다 이후 학년 — 걸러져야 한다.
-        AcademicPerformanceItem(grade=3, semester=1, category="수학", subject="미적분"),
     ],
     activities=[
         ActivityItem(
@@ -246,15 +246,6 @@ FAKE_RESULT_WITH_FUTURE_GRADE_DATA = SeteukAnalysisResult(
             activity_type=ActivityType.OTHER,
             description="학급 행사를 기획함.",
         ),
-        # 이후 학년 — 걸러져야 한다.
-        ActivityItem(
-            grade=3,
-            semester=1,
-            activity_category=ActivityCategory.SUBJECT_SPECIALTY,
-            activity_name="미적분 심화 탐구",
-            activity_type=ActivityType.REPORT,
-            description="치환적분을 활용함.",
-        ),
     ],
     awards=[
         # grade/semester가 없어(date만 있음) 이 검사의 대상이 아니다 — 그대로 남는다.
@@ -263,18 +254,26 @@ FAKE_RESULT_WITH_FUTURE_GRADE_DATA = SeteukAnalysisResult(
 )
 
 
-async def test_upload_drops_records_beyond_declared_current_grade(
-    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+def _freshman_year_for_grade(grade: int) -> int:
+    """오늘 날짜 기준으로 `grade`가 되도록 하는 입학 연도를 역산한다 —
+    `_expected_grade_from_freshman_year`와 같은 3월 기준 규칙."""
+    today = date.today()
+    academic_year_now = today.year if today.month >= 3 else today.year - 1
+    return academic_year_now - grade + 1
+
+
+async def _set_profile_grade(
+    client: AsyncClient, auth_headers: dict[str, str], grade: int, semester: int
 ) -> None:
-    """실제 문서에 학생이 아직 안 겪었어야 할 시점의 기록이 있으면(잘못된 파일,
-    갱신 안 된 프로필 등) 반영하지 않는다 — 안 그러면 진단·로드맵이 "현재 위치"를
-    잘못 판단한다."""
+    """검증 로직이 이제 입학 연도를 기준으로 삼으므로, 선언하는 학년과 앞뒤가
+    맞는 입학 연도도 함께 채운다."""
     await client.post(
         "/api/v1/profile",
         json={
             "name": "홍길동",
-            "grade": 2,
-            "semester": 1,
+            "grade": grade,
+            "semester": semester,
+            "freshman_academic_year": _freshman_year_for_grade(grade),
             "career_goal": {"goal": "연구원"},
             "target_department": "미정",
             "interest_keywords": [],
@@ -287,8 +286,17 @@ async def test_upload_drops_records_beyond_declared_current_grade(
         headers=auth_headers,
     )
 
+
+async def test_upload_drops_records_beyond_declared_current_semester(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """같은 학년 안에서도 아직 안 겪었어야 할 학기의 기록은 반영하지 않는다 —
+    안 그러면 진단·로드맵이 "현재 위치"를 잘못 판단한다. (문서 최고 학년이
+    선언한 학년을 넘지 않는 경우 — 넘는 경우는 아예 반려된다, 아래 별도 테스트.)"""
+    await _set_profile_grade(client, auth_headers, grade=2, semester=1)
+
     async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
-        return FAKE_RESULT_WITH_FUTURE_GRADE_DATA
+        return FAKE_RESULT_WITH_FUTURE_SEMESTER_DATA
 
     monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
 
@@ -298,7 +306,10 @@ async def test_upload_drops_records_beyond_declared_current_grade(
         files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
     )
     upload_id = created.json()["upload_id"]
-    await client.get(f"/api/v1/seteuk/uploads/{upload_id}", headers=auth_headers)
+    status = (
+        await client.get(f"/api/v1/seteuk/uploads/{upload_id}", headers=auth_headers)
+    ).json()
+    assert status["status"] == "done"
     await client.post(
         f"/api/v1/seteuk/uploads/{upload_id}/import", json={}, headers=auth_headers
     )
@@ -307,7 +318,7 @@ async def test_upload_drops_records_beyond_declared_current_grade(
         await client.get(f"/api/v1/seteuk/uploads/{upload_id}/result", headers=auth_headers)
     ).json()
 
-    # 2-1과 2학년 학년단위 기록만 남고, 같은 학년의 2-2와 3-1은 걸러진다.
+    # 2-1과 2학년 학년단위 기록만 남고, 같은 학년의 2-2는 걸러진다.
     kept_subjects = {item["subject"] for item in result["academic_performance"]}
     assert kept_subjects == {"수학Ⅰ"}
     kept_activity_names = {item["activity_name"] for item in result["activities"]}
@@ -321,6 +332,84 @@ async def test_upload_drops_records_beyond_declared_current_grade(
     async with TestSessionLocal() as db:
         academic_rows = (await db.execute(select(AcademicPerformance))).scalars().all()
     assert {r.subject for r in academic_rows} == {"수학Ⅰ"}
+
+
+async def test_upload_is_rejected_when_document_grade_exceeds_declared_grade(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """생기부에 선언한 현재 학년보다 높은 학년의 기록이 있으면(다른 사람 것이거나
+    학년을 안 갱신한 채 최신 생기부를 올린 경우) 일부만 조용히 걸러내지 않고
+    업로드 자체를 반려한다 — 학생이 무엇이 잘못됐는지 알고 바로잡게 한다."""
+    await _set_profile_grade(client, auth_headers, grade=2, semester=1)
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(
+            academic_performance=[
+                AcademicPerformanceItem(grade=2, semester=1, category="수학", subject="수학Ⅰ"),
+                AcademicPerformanceItem(grade=3, semester=1, category="수학", subject="미적분"),
+            ],
+        )
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+
+    created = await client.post(
+        "/api/v1/seteuk/uploads",
+        headers=auth_headers,
+        files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
+    )
+    upload_id = created.json()["upload_id"]
+    status = (
+        await client.get(f"/api/v1/seteuk/uploads/{upload_id}", headers=auth_headers)
+    ).json()
+
+    assert status["status"] == "failed"
+    assert "3학년" in status["failure_reason"]
+    assert "2학년" in status["failure_reason"]
+
+    # 반려된 업로드는 아무것도 반영되지 않는다.
+    async with TestSessionLocal() as db:
+        academic_rows = (await db.execute(select(AcademicPerformance))).scalars().all()
+    assert academic_rows == []
+
+
+async def test_upload_warns_but_accepts_when_document_grade_is_below_declared_grade(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """반대로 생기부가 선언한 현재 학년보다 낮은 학년까지만 있으면(최신 생기부를
+    아직 안 올린 경우) 문서 자체는 앞뒤가 맞으므로 반영은 하되, 더 최근 생기부를
+    올리라고 경고한다."""
+    await _set_profile_grade(client, auth_headers, grade=3, semester=1)
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(
+            academic_performance=[
+                AcademicPerformanceItem(grade=1, semester=1, category="수학", subject="수학"),
+            ],
+        )
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+
+    created = await client.post(
+        "/api/v1/seteuk/uploads",
+        headers=auth_headers,
+        files={"file": ("record.pdf", b"%PDF-1.4 ...", "application/pdf")},
+    )
+    upload_id = created.json()["upload_id"]
+    status = (
+        await client.get(f"/api/v1/seteuk/uploads/{upload_id}", headers=auth_headers)
+    ).json()
+    assert status["status"] == "done"
+
+    result = (
+        await client.get(f"/api/v1/seteuk/uploads/{upload_id}/result", headers=auth_headers)
+    ).json()
+
+    # 문서가 선언한 학년보다 낮을 뿐 미래 시점은 아니므로 걸러지지 않는다.
+    assert {item["subject"] for item in result["academic_performance"]} == {"수학"}
+
+    warning = next(e for e in result["errors"] if e["block_id"] == "stale_school_record")
+    assert "1학년" in warning["reason"]
+    assert "3학년" in warning["reason"]
 
 
 FAKE_RESULT_FOR_SELECTION = SeteukAnalysisResult(
@@ -750,3 +839,62 @@ async def test_the_enrollment_year_survives_filtering_and_reaches_the_user(
     async with TestSessionLocal() as db:
         user = await db.scalar(select(User))
     assert user is not None and user.freshman_academic_year == 2018
+
+
+# --- 입학 연도 기반 "지금쯤 몇 학년 몇 학기여야 하는지" 계산 — 순수 함수 단위 테스트 ---
+# 실제 오늘 날짜에 의존하는 통합 테스트로는 학기 경계(3월/9월)를 안정적으로
+# 검증할 수 없어서, today를 직접 주입해 계산 자체만 따로 검증한다.
+
+
+def test_expected_period_within_first_semester() -> None:
+    # 2025년 입학생은 2026년 5월(1학기 기간) 기준으로 2학년 1학기여야 한다.
+    grade, semester = seteuk_service._expected_period_from_freshman_year(2025, date(2026, 5, 1))
+    assert (grade, semester) == (2, 1)
+
+
+def test_expected_period_within_second_semester() -> None:
+    # 같은 입학생이 9월(2학기 기간)이면 2학년 2학기여야 한다.
+    grade, semester = seteuk_service._expected_period_from_freshman_year(2025, date(2026, 9, 15))
+    assert (grade, semester) == (2, 2)
+
+
+def test_expected_period_before_march_is_still_previous_academic_year() -> None:
+    # 1~2월은 새 학년도 시작 전이라 아직 이전 학년도(그리고 그 2학기)다.
+    grade, semester = seteuk_service._expected_period_from_freshman_year(2025, date(2027, 2, 20))
+    assert (grade, semester) == (2, 2)
+
+
+def test_expected_period_caps_at_grade_three_for_graduates() -> None:
+    # 입학한 지 3년이 넘으면(졸업) 학년은 3으로 묶는다 — 문서도 3학년을 못 넘는다.
+    grade, _ = seteuk_service._expected_period_from_freshman_year(2018, date(2026, 9, 15))
+    assert grade == 3
+
+
+# --- 문서 내 최고 (학년, 학기) 탐지 — 순수 함수 단위 테스트 ---
+
+
+def test_max_document_period_picks_highest_semester_at_highest_grade() -> None:
+    result = SeteukAnalysisResult(
+        academic_performance=[
+            AcademicPerformanceItem(grade=1, semester=2, category="국어", subject="국어"),
+            AcademicPerformanceItem(grade=2, semester=1, category="수학", subject="수학"),
+            AcademicPerformanceItem(grade=2, semester=2, category="영어", subject="영어"),
+        ],
+    )
+    assert seteuk_service._max_document_period(result) == (2, 2)
+
+
+def test_max_document_period_is_none_semester_when_only_grade_level_records_exist() -> None:
+    # 최고 학년에 학기 있는 기록이 하나도 없으면(자율활동 등만 있으면) 학기는
+    # 알 수 없다는 뜻으로 None을 돌려준다.
+    result = SeteukAnalysisResult(
+        academic_performance=[
+            AcademicPerformanceItem(grade=1, semester=1, category="국어", subject="국어"),
+        ],
+        volunteer_records=[VolunteerRecordItem(grade=2, hours=4, content="봉사")],
+    )
+    assert seteuk_service._max_document_period(result) == (2, None)
+
+
+def test_max_document_period_is_none_when_no_grade_found_anywhere() -> None:
+    assert seteuk_service._max_document_period(SeteukAnalysisResult()) is None

@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,6 +117,46 @@ async def _replace_previous_upload_data(
         )
 
 
+def _expected_period_from_freshman_year(
+    freshman_academic_year: int, today: date
+) -> tuple[int, int]:
+    """입학 연도와 오늘 날짜로 "지금쯤 몇 학년 몇 학기여야 하는지"를 계산한다.
+
+    `users.current_grade`/`current_semester`는 학생이 스스로 선언하고 스스로
+    갱신해야 하는 값이라 학기가 바뀌어도 프로필을 안 고치면 계속 낡아 있을 수
+    있다. 입학 연도는 한 번 정해지면 사실상 바뀌지 않는 값이라 더 믿을 수 있는
+    기준점이다. 한국 학제는 3월에 새 학년도가 시작하고(1학기: 3~8월, 2학기:
+    9~2월), 계산상 4학년 이상이 나오면(=졸업) 문서도 3학년을 넘을 수 없으므로
+    3으로 묶는다 — 프론트엔드가 "졸업"을 grade=3으로 보내는 것과 같은 규칙이다."""
+    academic_year_now = today.year if today.month >= 3 else today.year - 1
+    grade = min(max(academic_year_now - freshman_academic_year + 1, 1), 3)
+    semester = 1 if 3 <= today.month <= 8 else 2
+    return grade, semester
+
+
+def _max_document_period(result: SeteukAnalysisResult) -> tuple[int, int | None] | None:
+    """생기부 문서 안에서 실제로 발견된 가장 높은 (학년, 학기) — 그 학년까지
+    "얼마나 채워져 있는지"를 함께 본다. 학년을 읽어낸 기록이 하나도 없으면
+    None. 가장 높은 학년에 학기가 있는 기록(자율활동 등 학년 단위 기록 제외)이
+    하나도 없으면 학기는 None — 그 학년엔 도달했지만 몇 학기까지인지는 이
+    문서만으로 알 수 없다는 뜻이다."""
+    periods: list[tuple[int, int | None]] = (
+        [(item.grade, None) for item in result.attendance]
+        + [(item.grade, item.semester) for item in result.academic_performance]
+        + [(item.grade, item.semester) for item in result.reading_activities]
+        + [(item.grade, None) for item in result.volunteer_records]
+        + [(item.grade, item.semester) for item in result.activities]
+        + [(item.grade, item.semester) for item in result.awards if item.grade is not None]
+    )
+    if not periods:
+        return None
+    max_grade = max(grade for grade, _ in periods)
+    semesters_at_max_grade = [
+        semester for grade, semester in periods if grade == max_grade and semester is not None
+    ]
+    return max_grade, (max(semesters_at_max_grade) if semesters_at_max_grade else None)
+
+
 def _filter_future_grade_data(
     result: SeteukAnalysisResult, current_grade: int | None, current_semester: int | None
 ) -> SeteukAnalysisResult:
@@ -219,11 +259,67 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
         try:
             result = await parse_seteuk_pdf(pdf_bytes)
             user = await db.get(User, upload.user_id)
-            result = _filter_future_grade_data(
-                result,
-                user.current_grade if user else None,
-                user.current_semester if user else None,
+            current_semester = user.current_semester if user else None
+            current_grade = user.current_grade if user else None
+            freshman_year = user.freshman_academic_year if user else None
+            expected_period = (
+                _expected_period_from_freshman_year(freshman_year, datetime.now(UTC).date())
+                if freshman_year is not None
+                else None
             )
+            document_period = _max_document_period(result)
+            period_known = expected_period is not None and document_period is not None
+
+            if period_known:
+                expected_grade, expected_semester = expected_period
+                document_grade, document_semester = document_period
+                # 학년 자체가 계산된 것보다 높거나, 같은 학년이어도 그 학년 안에
+                # "얼마나 채워져 있는지"(학기)가 계산된 것보다 높으면(예: 지금
+                # 2학년 1학기여야 하는데 생기부에 2학년 2학기 기록이 있음) 다른
+                # 사람 것이거나 입학 연도를 잘못 입력한 것이다 — current_grade
+                # (자기 선언, 안 갱신하면 낡는 값)가 아니라 입학 연도로 판단해야
+                # 이 경우를 정확히 잡는다. 그 정도 어긋남은 조용히 걸러내기보다
+                # 되돌려서 바로잡게 한다.
+                exceeds_expected = document_grade > expected_grade or (
+                    document_grade == expected_grade
+                    and document_semester is not None
+                    and document_semester > expected_semester
+                )
+                if exceeds_expected:
+                    semester_label = f" {document_semester}학기" if document_semester else ""
+                    document_period_label = f"{document_grade}학년{semester_label}"
+                    upload.status = UploadStatus.FAILED.value
+                    upload.failure_reason = (
+                        f"이 생기부에는 {document_period_label} 기록이 있는데,"
+                        f" {freshman_year}학년도 입학 기준으로는 아직"
+                        f" {expected_grade}학년 {expected_semester}학기여야 합니다. 입학 연도가"
+                        " 맞는지, 다른 생기부를 올린 건 아닌지 확인해주세요."
+                    )
+                    await db.commit()
+                    return
+
+            result = _filter_future_grade_data(result, current_grade, current_semester)
+
+            # 반대로 문서의 최고 학년이 계산된 학년보다 낮으면(예: 지금
+            # 2학년이어야 하는데 생기부는 1학년까지만 있음) 문서 자체는 앞뒤가
+            # 맞으니 막을 이유는 없지만, 최신 생기부가 아닐 가능성이 높다 —
+            # 반영은 하되 눈에 띄게 알려준다. 같은 학년 안에서 학기만 덜 채워진
+            # 경우(현재 학기가 막 시작해 학교가 아직 입력 중인 상태)는 지극히
+            # 정상이라 경고하지 않는다 — 그래서 학년 단위로만 비교한다.
+            if period_known and document_period[0] < expected_period[0]:
+                result.errors.append(
+                    ParseError(
+                        block_id="stale_school_record",
+                        reason=(
+                            f"이 생기부는 {document_period[0]}학년까지만 기록돼 있는데,"
+                            f" {freshman_year}학년도 입학 기준으로는 이미"
+                            f" {expected_period[0]}학년입니다. 반영은 진행하지만, 더 최근"
+                            " 생기부가 있다면 다시 올려서 최신 기록으로 갱신하는 것을"
+                            " 권장합니다."
+                        ),
+                    )
+                )
+
             upload.raw_result = result.model_dump(mode="json")
             upload.status = UploadStatus.DONE.value
         except Exception as exc:

@@ -136,6 +136,10 @@ class UploadStatusResponse(BaseModel):
     parsing_confidence: float | None = None
     # 실제로 기록에 반영된 시점. 파싱만 끝나고 아직 검토 중이면 null이다.
     imported_at: datetime.datetime | None = None
+    # status가 failed일 때 왜 실패했는지. LatestUploadResponse에만 있고 여기엔
+    # 없었던 게 실제 버그였다 — 업로드 직후 폴링은 /uploads/latest가 아니라
+    # /uploads/{id}를 보는데, 이 값이 없으면 화면이 이유를 보여줄 수 없다.
+    failure_reason: str | None = None
 
 
 class LatestUploadResponse(BaseModel):

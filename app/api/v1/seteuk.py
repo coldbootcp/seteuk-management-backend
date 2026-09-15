@@ -77,6 +77,7 @@ async def get_upload_status(
         status=upload.status,
         parsing_confidence=upload.parsing_confidence,
         imported_at=upload.imported_at,
+        failure_reason=upload.failure_reason,
     )
 
 
