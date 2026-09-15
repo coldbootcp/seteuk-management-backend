@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -68,13 +69,19 @@ async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """검증 오류도 공통 에러 형식으로 통일한다 — 클라이언트가 FastAPI 기본
-    {"detail": [...]}와 우리 형식을 둘 다 처리하지 않아도 되게."""
+    {"detail": [...]}와 우리 형식을 둘 다 처리하지 않아도 되게.
+
+    `exc.errors()`를 그대로 JSONResponse에 넣으면 안 된다 — model_validator가
+    `raise ValueError(...)`로 만든 항목은 원본 예외 객체를 ctx.error에 그대로
+    담고 있어(pydantic-core 관례), JSONResponse의 기본 json.dumps가 그걸
+    직렬화하지 못해 이 핸들러 자체가 500으로 죽는다. FastAPI 자체 기본 핸들러가
+    쓰는 것과 같은 jsonable_encoder로 먼저 안전하게 바꾼다."""
     return JSONResponse(
         status_code=422,
         content={
             "error_code": "VALIDATION_ERROR",
             "message": "요청 형식이 올바르지 않습니다",
-            "details": exc.errors(),
+            "details": jsonable_encoder(exc.errors()),
         },
     )
 
