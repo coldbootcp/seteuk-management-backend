@@ -7,6 +7,7 @@
 """
 
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select
@@ -34,6 +35,34 @@ MAX_GRADES = 60
 MAX_PLANS = 40
 # 활동 설명은 원문이 길어 그대로 실으면 컨텍스트를 잡아먹는다.
 DESCRIPTION_LIMIT = 300
+
+
+@dataclass
+class ChatReferenceCatalog:
+    """한 번의 챗봇 호출 안에서만 유효한 기록 참조표.
+
+    모델에는 데이터베이스 UUID를 절대 보내지 않는다. 모델이 선택한 작은 정수 번호를
+    이 표로만 역참조해 실제 행을 찾는다. 다음 호출에서는 새 표를 만들므로, 번호는
+    장기 식별자도 아니고 학생 화면에 노출되는 id도 아니다.
+    """
+
+    by_index: dict[int, tuple[str, uuid.UUID]] = field(default_factory=dict)
+    _next_index: int = 1
+
+    def register(self, kind: str, record_id: uuid.UUID) -> int:
+        index = self._next_index
+        self._next_index += 1
+        self.by_index[index] = (kind, record_id)
+        return index
+
+    def resolve(self, index: Any, expected_kind: str) -> uuid.UUID | None:
+        # bool은 Python에서 int의 하위형이므로 엄격히 배제한다.
+        if isinstance(index, bool) or not isinstance(index, int):
+            return None
+        reference = self.by_index.get(index)
+        if reference is None or reference[0] != expected_kind:
+            return None
+        return reference[1]
 
 
 def _truncate(text: str | None, limit: int = DESCRIPTION_LIMIT) -> str | None:
@@ -290,3 +319,40 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             "plans": await _count(db, PlanItem, user.id),
         },
     }
+
+
+def prepare_context_for_chat(
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], ChatReferenceCatalog]:
+    """LLM에 안전하게 보낼 문맥과 호출 내부 참조표를 만든다.
+
+    활동·계획의 UUID, 부모 UUID처럼 모델이 복사할 수 있는 식별자를 제거한다. 활동의
+    부모 연결은 같은 호출의 숫자 index로 바꿔, 모델이 계보를 이해하면서도 DB 식별자는
+    전혀 알 수 없게 한다.
+    """
+    safe = {**context}
+    safe["activities"] = [dict(activity) for activity in context.get("activities", [])]
+    safe["plans"] = [dict(plan) for plan in context.get("plans", [])]
+    catalog = ChatReferenceCatalog()
+    activity_index_by_id: dict[str, int] = {}
+
+    for activity in safe["activities"]:
+        raw_id = activity.pop("id", None)
+        if raw_id is None:
+            continue
+        index = catalog.register("activity", uuid.UUID(str(raw_id)))
+        activity_index_by_id[str(raw_id)] = index
+        activity["index"] = index
+
+    for activity in safe["activities"]:
+        parent_id = activity.pop("parent_activity_id", None)
+        if parent_id is not None and str(parent_id) in activity_index_by_id:
+            activity["parent_activity_index"] = activity_index_by_id[str(parent_id)]
+
+    for plan in safe["plans"]:
+        raw_id = plan.pop("id", None)
+        if raw_id is None:
+            continue
+        plan["index"] = catalog.register("plan", uuid.UUID(str(raw_id)))
+
+    return safe, catalog

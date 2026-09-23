@@ -37,7 +37,7 @@ from app.services.chat.consultation_tools import (
 from app.services.chat.consultation_tools import (
     execute_consultation_tool,
 )
-from app.services.chat.context import build_context
+from app.services.chat.context import build_context, prepare_context_for_chat
 from app.services.chat.prompts import build_system_prompt
 from app.services.chat.tools import TOOL_SPECS, execute_tool
 from app.services.llm import stream_chat
@@ -309,12 +309,13 @@ async def stream_reply(
             .limit(HISTORY_LIMIT)
         )
         context = await build_context(db, user)
+        model_context, reference_catalog = prepare_context_for_chat(context)
 
         llm_messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": build_system_prompt(
-                    json.dumps(context, ensure_ascii=False), edit_mode=mode == ChatMode.EDIT
+                    json.dumps(model_context, ensure_ascii=False), edit_mode=mode == ChatMode.EDIT
                 ),
             }
         ]
@@ -377,7 +378,9 @@ async def stream_reply(
                         arguments = {}
                         result: dict[str, Any] = {"error": "도구 인자를 해석하지 못했습니다"}
                     else:
-                        result = await execute_tool(db, user, call["name"], arguments)
+                        result = await execute_tool(
+                            db, user, call["name"], arguments, reference_catalog
+                        )
 
                     action = {"tool": call["name"], "arguments": arguments, "result": result}
                     applied_actions.append(action)

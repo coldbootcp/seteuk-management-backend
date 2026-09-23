@@ -8,7 +8,6 @@
 
 import asyncio
 import datetime as dt
-import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,19 +29,20 @@ from app.services import (
     record_service,
     student_interest_service,
 )
+from app.services.chat.context import ChatReferenceCatalog
 
 _ACTIVITY_CATEGORIES = [c.value for c in ActivityCategory]
 _ACTIVITY_TYPES = [t.value for t in ActivityType]
 _PLAN_ITEM_TYPES = [t.value for t in PlanItemType]
 
 
-def _uuid(value: Any) -> uuid.UUID | None:
-    if not value:
-        return None
-    try:
-        return uuid.UUID(str(value))
-    except ValueError:
-        return None
+def _reference(
+    catalog: ChatReferenceCatalog, args: dict[str, Any], key: str, expected_kind: str
+):
+    record_id = catalog.resolve(args.get(key), expected_kind)
+    if record_id is None:
+        raise AppError("현재 대화에서 확인한 기록 번호를 선택해 주세요")
+    return record_id
 
 
 def _date(value: Any) -> dt.date | None:
@@ -73,7 +73,9 @@ async def _add_reading(db: AsyncSession, user: User, args: dict[str, Any]) -> di
     return {"reading_id": str(row.id), "title": row.title}
 
 
-async def _add_activity(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+async def _add_activity(
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
+) -> dict[str, Any]:
     row = await record_service.create_record(
         db,
         Activity,
@@ -88,25 +90,34 @@ async def _add_activity(db: AsyncSession, user: User, args: dict[str, Any]) -> d
             "role": args.get("role"),
             "description": args.get("description") or args["activity_name"],
             "keywords": args.get("keywords") or [],
-            "parent_activity_id": _uuid(args.get("parent_activity_id")),
+            "parent_activity_id": (
+                _reference(catalog, args, "parent_activity_index", "activity")
+                if args.get("parent_activity_index") is not None
+                else None
+            ),
         },
     )
-    return {"activity_id": str(row.id), "activity_name": row.activity_name}
+    return {
+        "activity_index": catalog.register("activity", row.id),
+        "activity_name": row.activity_name,
+    }
 
 
-async def _update_activity(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    activity_id = _uuid(args.get("activity_id"))
-    if activity_id is None:
-        raise AppError("activity_id가 올바르지 않습니다")
+async def _update_activity(
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
+) -> dict[str, Any]:
+    activity_id = _reference(catalog, args, "activity_index", "activity")
     fields = {
         key: value
         for key, value in args.items()
-        if key != "activity_id" and value is not None
+        if key not in {"activity_index", "parent_activity_index"} and value is not None
     }
-    if "parent_activity_id" in fields:
-        fields["parent_activity_id"] = _uuid(fields["parent_activity_id"])
+    if args.get("parent_activity_index") is not None:
+        fields["parent_activity_id"] = _reference(
+            catalog, args, "parent_activity_index", "activity"
+        )
     row = await record_service.update_record(db, Activity, user.id, activity_id, fields)
-    return {"activity_id": str(row.id), "activity_name": row.activity_name}
+    return {"activity_index": args["activity_index"], "activity_name": row.activity_name}
 
 
 async def _add_award(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -121,7 +132,7 @@ async def _add_award(db: AsyncSession, user: User, args: dict[str, Any]) -> dict
             "raw_date": args.get("raw_date"),
         },
     )
-    return {"award_id": str(row.id), "name": row.name}
+    return {"name": row.name}
 
 
 async def _add_volunteer(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +149,7 @@ async def _add_volunteer(db: AsyncSession, user: User, args: dict[str, Any]) -> 
             "raw_date": args.get("raw_date"),
         },
     )
-    return {"volunteer_id": str(row.id), "place": row.place}
+    return {"place": row.place}
 
 
 async def _add_academic_performance(
@@ -159,10 +170,12 @@ async def _add_academic_performance(
             "rank": args.get("rank"),
         },
     )
-    return {"academic_performance_id": str(row.id), "subject": row.subject}
+    return {"subject": row.subject}
 
 
-async def _add_plan(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
+async def _add_plan(
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
+) -> dict[str, Any]:
     plan = await plan_service.create_plan_item(
         db,
         user.id,
@@ -174,35 +187,36 @@ async def _add_plan(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[
             target_grade=args.get("target_grade"),
             target_semester=args.get("target_semester"),
             keywords=args.get("keywords") or [],
-            source_activity_id=_uuid(args.get("source_activity_id")),
+            source_activity_id=(
+                _reference(catalog, args, "source_activity_index", "activity")
+                if args.get("source_activity_index") is not None
+                else None
+            ),
         ),
         origin=PlanItemOrigin.CHATBOT,
     )
-    return {"plan_id": str(plan.id), "title": plan.title}
+    return {"plan_index": catalog.register("plan", plan.id), "title": plan.title}
 
 
-async def _update_plan(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    plan_id = _uuid(args.get("plan_id"))
-    if plan_id is None:
-        raise AppError("plan_id가 올바르지 않습니다")
-    fields = {key: value for key, value in args.items() if key != "plan_id" and value is not None}
+async def _update_plan(
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
+) -> dict[str, Any]:
+    plan_id = _reference(catalog, args, "plan_index", "plan")
+    fields = {
+        key: value for key, value in args.items() if key != "plan_index" and value is not None
+    }
     plan = await plan_service.update_plan_item(db, user.id, plan_id, fields)
-    return {"plan_id": str(plan.id), "status": plan.status}
+    return {"plan_index": args["plan_index"], "status": plan.status}
 
 
-async def _complete_plan(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    plan_id = _uuid(args.get("plan_id"))
-    if plan_id is None:
-        raise AppError("plan_id가 올바르지 않습니다")
-    plan = await plan_service.complete_plan_item(db, user, plan_id, PlanItemCompleteRequest())
+async def _complete_plan(
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
+) -> dict[str, Any]:
+    plan_id = _reference(catalog, args, "plan_index", "plan")
+    await plan_service.complete_plan_item(db, user, plan_id, PlanItemCompleteRequest())
     return {
-        "plan_id": str(plan.id),
-        "created_activity_id": str(plan.completed_activity_id)
-        if plan.completed_activity_id
-        else None,
-        "created_reading_id": str(plan.completed_reading_id)
-        if plan.completed_reading_id
-        else None,
+        "plan_index": args["plan_index"],
+        "completed": True,
     }
 
 
@@ -237,20 +251,17 @@ async def _run_diagnosis(db: AsyncSession, user: User, args: dict[str, Any]) -> 
     task = asyncio.create_task(diagnosis_service.run_diagnosis_job(diagnosis.id, user.id))
     _BACKGROUND_JOBS.add(task)
     task.add_done_callback(_BACKGROUND_JOBS.discard)
-    return {"diagnosis_id": str(diagnosis.id), "status": diagnosis.status}
+    return {"status": diagnosis.status}
 
 
 async def _recommend_follow_up(
-    db: AsyncSession, user: User, args: dict[str, Any]
+    db: AsyncSession, user: User, args: dict[str, Any], catalog: ChatReferenceCatalog
 ) -> dict[str, Any]:
-    activity_id = _uuid(args.get("source_activity_id"))
-    if activity_id is None:
-        raise AppError("source_activity_id가 올바르지 않습니다")
+    activity_id = _reference(catalog, args, "source_activity_index", "activity")
     recommendation = await recommendation_service.create_follow_up(
         db, user, FollowUpRequest(source_activity_id=activity_id)
     )
     return {
-        "recommendation_id": str(recommendation.id),
         "options": [option["topic"] for option in recommendation.options],
     }
 
@@ -289,7 +300,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
         "add_activity",
         "학생이 수행한 활동(탐구/발표/실험/프로젝트/수행평가 등)을 활동 탭에 추가한다. "
-        "이 활동이 기존 활동을 발전시킨 것이면 parent_activity_id를 반드시 채워라.",
+        "이 활동이 기존 활동을 발전시킨 것이면 parent_activity_index를 반드시 채워라.",
         {
             "activity_name": {"type": "string"},
             "description": {"type": "string"},
@@ -298,9 +309,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "subject": {"type": "string"},
             "role": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
-            "parent_activity_id": {
-                "type": "string",
-                "description": "이 활동이 고도화한 이전 활동의 id",
+            "parent_activity_index": {
+                "type": "integer",
+                "description": "이 활동이 고도화한 이전 활동의 index 번호",
             },
             "grade": _GRADE,
             "semester": _SEMESTER,
@@ -311,16 +322,16 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "update_activity",
         "이미 기록된 활동의 내용을 수정한다. 바꿀 필드만 넣어라.",
         {
-            "activity_id": {"type": "string"},
+            "activity_index": {"type": "integer"},
             "activity_name": {"type": "string"},
             "description": {"type": "string"},
             "activity_type": {"type": "string", "enum": _ACTIVITY_TYPES},
             "subject": {"type": "string"},
             "role": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
-            "parent_activity_id": {"type": "string"},
+            "parent_activity_index": {"type": "integer"},
         },
-        ["activity_id"],
+        ["activity_index"],
     ),
     _tool(
         "add_award",
@@ -370,14 +381,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
         "add_plan",
         "앞으로 할 일을 계획으로 등록한다. 특정 과거 활동의 후속이면 "
-        "source_activity_id를 채워 계보를 이어라.",
+        "source_activity_index를 채워 계보를 이어라.",
         {
             "title": {"type": "string"},
             "description": {"type": "string"},
             "item_type": {"type": "string", "enum": _PLAN_ITEM_TYPES},
             "subject": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
-            "source_activity_id": {"type": "string"},
+            "source_activity_index": {"type": "integer"},
             "target_grade": _GRADE,
             "target_semester": _SEMESTER,
         },
@@ -387,7 +398,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "update_plan",
         "계획의 내용이나 상태를 바꾼다(status: planned/in_progress/done/dropped).",
         {
-            "plan_id": {"type": "string"},
+            "plan_index": {"type": "integer"},
             "title": {"type": "string"},
             "description": {"type": "string"},
             "status": {"type": "string",
@@ -395,14 +406,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "target_grade": _GRADE,
             "target_semester": _SEMESTER,
         },
-        ["plan_id"],
+        ["plan_index"],
     ),
     _tool(
         "complete_plan",
         "계획을 완료 처리한다. 활동/수행평가 계획은 활동 기록으로, 독서 계획은 "
         "독서 기록으로 자동 승격된다.",
-        {"plan_id": {"type": "string"}},
-        ["plan_id"],
+        {"plan_index": {"type": "integer"}},
+        ["plan_index"],
     ),
     _tool(
         "remember",
@@ -438,8 +449,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
         "recommend_follow_up",
         "특정 활동의 후속 탐구 주제를 추천받는다.",
-        {"source_activity_id": {"type": "string"}},
-        ["source_activity_id"],
+        {"source_activity_index": {"type": "integer"}},
+        ["source_activity_index"],
     ),
 ]
 
@@ -461,7 +472,11 @@ TOOL_HANDLERS = {
 
 
 async def execute_tool(
-    db: AsyncSession, user: User, name: str, args: dict[str, Any]
+    db: AsyncSession,
+    user: User,
+    name: str,
+    args: dict[str, Any],
+    catalog: ChatReferenceCatalog,
 ) -> dict[str, Any]:
     """도구 실행 결과를 항상 dict로 돌려준다. 실패해도 예외를 올리지 않고 error를
     담아 보내, 챗봇이 사용자에게 무엇이 왜 안 됐는지 설명할 수 있게 한다."""
@@ -469,6 +484,15 @@ async def execute_tool(
     if handler is None:
         return {"error": f"알 수 없는 도구입니다: {name}"}
     try:
+        if name in {
+            "add_activity",
+            "update_activity",
+            "add_plan",
+            "update_plan",
+            "complete_plan",
+            "recommend_follow_up",
+        }:
+            return await handler(db, user, args, catalog)
         return await handler(db, user, args)
     except AppError as exc:
         return {"error": exc.message}
