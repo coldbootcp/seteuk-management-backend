@@ -144,6 +144,9 @@ class ReadingActivityRead(RecordBase):
 class AwardCreate(BaseModel):
     name: str
     rank: str | None = None
+    # 주최·주관(참가대상). 생기부 파싱은 이 값을 학년-학기 추정에도 쓰지만,
+    # 직접 입력에서는 학생이 대회 주최를 적을 수 있게 열어 둔다.
+    participants: str | None = None
     date: date_type | None = None
     raw_date: str | None = None
     # 직접 입력할 때는 학생이 시점을 알고 있다. 생기부 파싱은 참가대상과
@@ -157,6 +160,7 @@ class AwardUpdate(BaseModel):
     semester: int | None = Field(default=None, ge=1, le=2)
     name: str | None = None
     rank: str | None = None
+    participants: str | None = None
     date: date_type | None = None
     raw_date: str | None = None
 
