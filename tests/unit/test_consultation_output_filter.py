@@ -116,3 +116,26 @@ def test_filter_does_not_claim_missing_activities_without_school_record() -> Non
     assert "전혀 기록되지" not in result
     assert "확인할 수 없습니다" in result
     assert "현재 학기" in result
+
+
+def test_filter_removes_an_invented_existing_plan_claim() -> None:
+    result = filter_consultation_output_for_period(
+        "2학년 2학기에 미세먼지 예측 모델링 활동이 제안되어 있습니다.\n"
+        "이번 학기에는 관심 분야를 바탕으로 새 주제를 함께 검토해 볼 수 있어요.",
+        target_grade=2,
+        target_semester=2,
+    )
+
+    assert "미세먼지" not in result
+    assert "새 주제" in result
+
+
+def test_filter_keeps_a_claim_about_a_real_existing_plan_title() -> None:
+    result = filter_consultation_output_for_period(
+        "기존 계획의 반도체 소자 물리 탐구가 이번 학기에 제안되어 있습니다.",
+        target_grade=2,
+        target_semester=2,
+        confirmed_plan_titles=["반도체 소자 물리 탐구"],
+    )
+
+    assert "반도체 소자 물리 탐구" in result

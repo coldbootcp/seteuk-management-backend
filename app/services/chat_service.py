@@ -87,6 +87,14 @@ _DRAFT_SAVED_CLAIM = re.compile(r"계획이\s*(?:잘\s*)?저장되었습니다")
 _PREMATURE_DRAFT_CONFIRMATION = re.compile(
     r"계획\s*초안(?:을|이)[^.!?]{0,80}(?:확정|저장)[^.!?]{0,80}[.!?]\s*"
 )
+# 실제로 저장된 계획 제목을 근거로 하지 않고, 모델이 임의의 주제가 이미 계획에
+# 들어 있는 것처럼 단정한 응답을 마지막에 차단한다. 새 주제를 "제안합니다"라고
+# 말하는 것은 허용하되, "제안되어 있습니다"처럼 기존 사실로 말하는 문장만 막는다.
+_UNVERIFIED_PLAN_CLAIM = re.compile(
+    r"(?:제안되어|계획되어|정해져|등록되어|포함되어|반영되어)\s*(?:있(?:습니다|어요|다)|있는)"
+    r"|이미.{0,50}(?:계획|제안|로드맵).{0,50}(?:있(?:습니다|어요|다)|되어)",
+    re.IGNORECASE,
+)
 
 
 def _period_index(grade: int, semester: int) -> int:
@@ -101,6 +109,7 @@ def filter_consultation_output_for_period(
     school_record_status: str = "imported",
     has_declared_direction: bool = False,
     has_current_course_data: bool = True,
+    confirmed_plan_titles: list[str] | None = None,
 ) -> str:
     """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
 
@@ -146,6 +155,18 @@ def filter_consultation_output_for_period(
     filtered = _INTERNAL_DRAFT_RETRY.sub("", filtered)
     filtered = _DRAFT_SAVED_CLAIM.sub("이번 학기 계획 초안을 정리했습니다", filtered)
     filtered = _PREMATURE_DRAFT_CONFIRMATION.sub("", filtered)
+
+    # 최초 상담에는 확정된 계획이 없으며, 재평가 상담에서도 실제 저장된 제목에
+    # 없는 주제를 기존 계획이라고 부르면 안 된다. 프롬프트만으로는 이 규칙을
+    # 지키지 않은 실제 모델 응답이 있었으므로, 해당 문장은 학생에게 보내지 않는다.
+    # 제목이 있는 문장은 보존해 기존 계획의 정상적인 회고는 가능하게 한다.
+    plan_titles = confirmed_plan_titles or []
+    filtered = "\n".join(
+        line
+        for line in filtered.splitlines()
+        if not _UNVERIFIED_PLAN_CLAIM.search(line)
+        or any(title and title in line for title in plan_titles)
+    )
 
     # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
     # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를
@@ -539,6 +560,9 @@ async def stream_consultation_reply(
                         and record.get("semester") == session.target_semester
                         for record in context.get("academic_performance", [])
                     ),
+                    confirmed_plan_titles=[
+                        str(node.get("title", "")) for node in (roadmap_summary or [])
+                    ],
                 )
                 if visible_text:
                     if answer_parts:
