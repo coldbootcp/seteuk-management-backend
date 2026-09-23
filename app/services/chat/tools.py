@@ -89,6 +89,10 @@ async def _add_activity(
             "activity_type": args.get("activity_type") or ActivityType.OTHER.value,
             "role": args.get("role"),
             "description": args.get("description") or args["activity_name"],
+            # 배운 점·느낀 점은 별도 필드다. 예전에는 도구에 reflection이 없어
+            # 모델이 배운 점을 description에 뭉쳐 넣었고, 활동 화면의 '배운 점' 칸이
+            # 비어 보였다(활동 폼은 두 칸을 따로 받는다).
+            "reflection": args.get("reflection"),
             "keywords": args.get("keywords") or [],
             "parent_activity_id": (
                 _reference(catalog, args, "parent_activity_index", "activity")
@@ -303,7 +307,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "이 활동이 기존 활동을 발전시킨 것이면 parent_activity_index를 반드시 채워라.",
         {
             "activity_name": {"type": "string"},
-            "description": {"type": "string"},
+            "description": {
+                "type": "string",
+                "description": "무엇을 어떻게 했는지(과정·방법·결과). 배운 점은 reflection에.",
+            },
+            "reflection": {
+                "type": "string",
+                "description": "활동에서 배운 점·느낀 점. description과 별개 필드다.",
+            },
             "activity_category": {"type": "string", "enum": _ACTIVITY_CATEGORIES},
             "activity_type": {"type": "string", "enum": _ACTIVITY_TYPES},
             "subject": {"type": "string"},
@@ -324,7 +335,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
         {
             "activity_index": {"type": "integer"},
             "activity_name": {"type": "string"},
-            "description": {"type": "string"},
+            "description": {
+                "type": "string",
+                "description": "무엇을 어떻게 했는지. 배운 점은 여기 말고 reflection에.",
+            },
+            "reflection": {
+                "type": "string",
+                "description": "활동에서 배운 점·느낀 점. description과 별개 필드다.",
+            },
             "activity_type": {"type": "string", "enum": _ACTIVITY_TYPES},
             "subject": {"type": "string"},
             "role": {"type": "string"},
