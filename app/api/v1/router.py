@@ -15,6 +15,7 @@ from app.api.v1.recommendations import router as recommendations_router
 from app.api.v1.records import record_routers
 from app.api.v1.roadmaps import router as roadmaps_router
 from app.api.v1.seteuk import router as seteuk_router
+from app.api.v1.timetables import router as timetables_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -22,6 +23,7 @@ api_router.include_router(account_router)
 api_router.include_router(admission_catalog_router)
 api_router.include_router(application_preparations_router)
 api_router.include_router(seteuk_router)
+api_router.include_router(timetables_router)
 api_router.include_router(profile_router)
 api_router.include_router(education_policies_router)
 api_router.include_router(diagnosis_router)
