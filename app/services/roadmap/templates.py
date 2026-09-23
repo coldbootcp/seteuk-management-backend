@@ -104,10 +104,12 @@ NARRATIVE_STAGES: list[NarrativeStage] = [
     ),
 ]
 
-# 이미 지나간 학기의 마디. 새로 계획할 것이 아니라 생기부에서 확인할 대상이다.
+# 이미 지나간 학기의 마디. 새로 계획할 것이 아니라 지난 기록을 회고하는 자리다.
+# 문구는 생기부 업로드 여부와 무관하게 맞아야 한다 — 생기부를 올리지 않은 학생에게
+# "생기부 연동" 안내를 하드코딩하면, 직접 기록만으로 쓰는 학생에게 맞지 않는다.
 RETROSPECT_STAGE = "회고"
-RETROSPECT_TITLE = "기존 활동 기록"
-RETROSPECT_OBJECTIVE = "생기부 연동을 통해 과거 활동을 확인하세요."
+RETROSPECT_TITLE = "지난 학기 기록"
+RETROSPECT_OBJECTIVE = "이 시기에 남긴 활동·성적·독서·수상·봉사 기록이 여기에 모입니다."
 
 
 def active_index(grade: int, semester: int) -> int:
