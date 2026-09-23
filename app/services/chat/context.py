@@ -8,6 +8,7 @@
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -17,6 +18,7 @@ from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
 from app.models.award import Award
+from app.models.calendar_event import CalendarEvent
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemStatus
 from app.models.reading_activity import ReadingActivity
@@ -197,6 +199,24 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .order_by(Attendance.grade.asc())
         )
     )
+    # 시험·수행평가 일정 중 다가오는(또는 지금 진행 중인) 것만 싣는다. 과거 일정
+    # 전부를 넣으면 컨텍스트만 잡아먹고, 챗봇에게 필요한 건 "곧 있을 평가를 앞두고
+    # 무엇을 준비할지"다. 오늘 기준으로 아직 끝나지 않은 일정을 시작일 순으로 담고,
+    # 너무 먼 미래(약 4개월 뒤)까지는 보지 않는다.
+    today = datetime.now(UTC).date()
+    horizon = today + timedelta(days=120)
+    upcoming_events = list(
+        await db.scalars(
+            select(CalendarEvent)
+            .where(
+                CalendarEvent.user_id == user.id,
+                CalendarEvent.end_date >= today,
+                CalendarEvent.start_date <= horizon,
+            )
+            .order_by(CalendarEvent.start_date.asc())
+            .limit(20)
+        )
+    )
     plans = list(
         await db.scalars(
             select(PlanItem)
@@ -296,6 +316,19 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
         "attendance": [
             {"grade": a.grade, "total_days": a.total_days, "absence": a.absence, "note": a.note}
             for a in attendance
+        ],
+        # 다가오는 시험·수행평가. 챗봇이 "곧 있을 평가를 앞두고 무엇을 준비할지"를
+        # 학생의 실제 일정에 맞춰 말할 수 있게 한다(오늘 이후~약 4개월).
+        "upcoming_calendar_events": [
+            {
+                "type": e.event_type,
+                "title": e.title,
+                "subject": e.subject,
+                "start_date": e.start_date.isoformat(),
+                "end_date": e.end_date.isoformat(),
+                "memo": e.memo,
+            }
+            for e in upcoming_events
         ],
         "plans": [
             {
