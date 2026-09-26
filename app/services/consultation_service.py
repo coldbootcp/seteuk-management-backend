@@ -7,7 +7,7 @@ roadmap_plan_events에 반영된다 — "버튼을 누르기 전까지는 확정
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +65,18 @@ async def has_ever_concluded(db: AsyncSession, user_id: uuid.UUID) -> bool:
     return existing is not None
 
 
+def _is_graduate(user: User, today: date | None = None) -> bool:
+    """입학 연도로 졸업 여부를 판단한다. 오늘 학년도가 입학 후 3년을 넘겼으면
+    졸업생(수시 재수생)이다. academic_timing의 expected_grade 계산과 같은 규칙이며,
+    프론트가 졸업을 grade=3/semester=2로 뭉개 보내도 여기서 다시 가려낸다."""
+    if not user.freshman_academic_year:
+        return False
+    ref = today or date.today()
+    academic_year_now = ref.year if ref.month >= 3 else ref.year - 1
+    expected_grade = academic_year_now - user.freshman_academic_year + 1
+    return expected_grade > 3
+
+
 async def get_status(db: AsyncSession, user: User) -> ConsultationStatusResponse:
     if user.current_grade is None or user.current_semester is None:
         return ConsultationStatusResponse(satisfied=True)
@@ -73,9 +85,14 @@ async def get_status(db: AsyncSession, user: User) -> ConsultationStatusResponse
     if await has_concluded_for_period(db, user.id, grade, semester):
         return ConsultationStatusResponse(satisfied=True)
 
-    required_kind = (
-        "initial" if not await has_ever_concluded(db, user.id) else "semester_review"
-    )
+    # 졸업생(수시 재수생)은 로드맵 대신 적합성 상담(graduate_fit)을 요구한다.
+    # 확정된 생기부로 목표 학과 지원 전략을 다루므로 initial/semester_review와 다르다.
+    if _is_graduate(user):
+        required_kind = "graduate_fit"
+    else:
+        required_kind = (
+            "initial" if not await has_ever_concluded(db, user.id) else "semester_review"
+        )
     resumable = await db.scalar(
         select(ConsultationSession)
         .where(
@@ -115,16 +132,15 @@ async def get_or_create_session(db: AsyncSession, user: User) -> ConsultationSes
         if session is not None:
             return session
 
-    kind = (
-        ConsultationKind.INITIAL.value
-        if status.required_kind == "initial"
-        else ConsultationKind.SEMESTER_REVIEW.value
-    )
-    purpose = (
-        ConversationPurpose.INITIAL_CONSULTATION.value
-        if kind == ConsultationKind.INITIAL.value
-        else ConversationPurpose.SEMESTER_REVIEW_CONSULTATION.value
-    )
+    if status.required_kind == "graduate_fit":
+        kind = ConsultationKind.GRADUATE_FIT.value
+        purpose = ConversationPurpose.GRADUATE_FIT_CONSULTATION.value
+    elif status.required_kind == "initial":
+        kind = ConsultationKind.INITIAL.value
+        purpose = ConversationPurpose.INITIAL_CONSULTATION.value
+    else:
+        kind = ConsultationKind.SEMESTER_REVIEW.value
+        purpose = ConversationPurpose.SEMESTER_REVIEW_CONSULTATION.value
     conversation = Conversation(user_id=user.id, purpose=purpose)
     db.add(conversation)
     await db.flush()
@@ -338,6 +354,20 @@ async def conclude(
     """도구 호출의 부수효과가 아니라 오직 이 함수(POST .../conclude)로만 실행된다.
     챗봇이 signal_ready_to_conclude를 부른 뒤 학생이 실제로 나가기 버튼을 눌러야
     한다는 요구를 그대로 구현한다."""
+    # 졸업생 적합성 상담은 로드맵을 만들지 않는다 — draft_plan 없이 대화만으로
+    # 끝나며, 세션만 완료 처리한다. 재학생 상담은 기존대로 draft_plan을 요구한다.
+    if session.kind == ConsultationKind.GRADUATE_FIT.value:
+        if session.status not in (
+            ConsultationStatus.READY.value,
+            ConsultationStatus.IN_PROGRESS.value,
+        ):
+            raise ConsultationNotReadyError("상담 세션 상태가 올바르지 않습니다")
+        session.status = ConsultationStatus.CONCLUDED.value
+        session.concluded_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(session)
+        return session
+
     if session.status != ConsultationStatus.READY.value or session.draft_plan is None:
         raise ConsultationNotReadyError(
             "아직 상담이 끝나지 않았습니다 — 챗봇이 준비됐다는 신호를 보내야 합니다"

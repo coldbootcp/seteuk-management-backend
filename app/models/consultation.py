@@ -12,10 +12,13 @@ from app.db.base import Base
 
 class ConsultationKind(StrEnum):
     """최초 상담은 백지에서 3개년 큰 계획을 세우고, 재평가는 학기가 바뀔 때마다
-    강제되어 기존 큰 계획을 점검·조정한다."""
+    강제되어 기존 큰 계획을 점검·조정한다. 졸업생(수시 재수생)은 생기부가 이미
+    확정되어 새 계획을 세울 수 없으므로, 로드맵 대신 확정된 생기부와 목표 학과의
+    적합성·지원 전략만 상담한다(graduate_fit)."""
 
     INITIAL = "initial"
     SEMESTER_REVIEW = "semester_review"
+    GRADUATE_FIT = "graduate_fit"
 
 
 class ConsultationStatus(StrEnum):

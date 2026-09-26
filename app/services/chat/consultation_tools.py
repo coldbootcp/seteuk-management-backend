@@ -17,6 +17,7 @@ from app.core.exceptions import AppError
 from app.models.consultation import ConsultationKind, ConsultationSession, ConsultationStatus
 from app.models.user import User
 from app.schemas.consultation import DraftPlan
+from app.services import admission_fit_service
 
 _STAGE_NAMES = ["탐색", "기초", "연결", "분화", "독립 탐구", "종합"]
 
@@ -186,6 +187,66 @@ async def execute_consultation_tool(
     args: dict[str, Any],
 ) -> dict[str, Any]:
     handler = TOOL_HANDLERS.get(name)
+    if handler is None:
+        return {"error": f"알 수 없는 도구입니다: {name}"}
+    try:
+        return await handler(db, user, session, args)
+    except AppError as exc:
+        return {"error": exc.message}
+    except Exception as exc:
+        await db.rollback()
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+# ── 졸업생(수시 재수생) 적합성 상담 전용 도구 ──────────────────────────────
+# 재학생 로드맵 도구(위)와 완전히 분리한다. 졸업생 상담은 계획을 만들지 않고,
+# 대신 목표 학과의 공개 입시 데이터를 조회해 승산을 근거 있게 말한다.
+
+
+async def _lookup_department_fit(
+    db: AsyncSession, user: User, session: ConsultationSession, args: dict[str, Any]
+) -> dict[str, Any]:
+    department = args.get("department", "")
+    if not department or not str(department).strip():
+        return {"error": "department(조회할 학과 이름)를 채워주세요"}
+    return await admission_fit_service.search_program_fit(
+        db,
+        department_query=str(department),
+        university_query=(str(args["university"]) if args.get("university") else None),
+    )
+
+
+GRADUATE_FIT_TOOL_SPECS: list[dict[str, Any]] = [
+    _tool(
+        "lookup_department_fit",
+        "목표 학과의 공개 입시 데이터(모집인원·수시/정시 경쟁률·전형별 결과·교육목표·"
+        "진로)를 어디가 자료에서 찾아 온다. 학생이 지망하는 학과의 현실적 승산을 감이 "
+        "아니라 실제 수치로 판단하기 위해 쓴다. 대학이 특정되면 university도 함께 넘겨 "
+        "좁혀라. 결과가 비어 있으면 데이터가 없다는 뜻이니 수치를 지어내지 마라.",
+        {
+            "department": {"type": "string", "description": "조회할 학과 이름(예: 컴퓨터공학과)"},
+            "university": {
+                "type": "string",
+                "description": "특정 대학으로 좁힐 때만. 모르면 비워 둔다.",
+            },
+        },
+        ["department"],
+    ),
+]
+
+_GRADUATE_FIT_HANDLERS = {
+    "lookup_department_fit": _lookup_department_fit,
+}
+
+
+async def execute_graduate_fit_tool(
+    db: AsyncSession,
+    user: User,
+    session: ConsultationSession,
+    name: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    handler = _GRADUATE_FIT_HANDLERS.get(name)
     if handler is None:
         return {"error": f"알 수 없는 도구입니다: {name}"}
     try:

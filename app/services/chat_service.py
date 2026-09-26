@@ -26,16 +26,18 @@ from app.core.exceptions import (
     LLMUnavailableError,
 )
 from app.db.session import AsyncSessionLocal
-from app.models.consultation import ConsultationStatus
+from app.models.consultation import ConsultationKind, ConsultationStatus
 from app.models.conversation import ChatMode, Conversation, Message, MessageRole
 from app.models.user import User
 from app.services import consultation_service
 from app.services.chat.consultation_prompts import build_consultation_system_prompt
 from app.services.chat.consultation_tools import (
-    TOOL_SPECS as CONSULTATION_TOOL_SPECS,
+    GRADUATE_FIT_TOOL_SPECS,
+    execute_consultation_tool,
+    execute_graduate_fit_tool,
 )
 from app.services.chat.consultation_tools import (
-    execute_consultation_tool,
+    TOOL_SPECS as CONSULTATION_TOOL_SPECS,
 )
 from app.services.chat.context import build_context, prepare_context_for_chat
 from app.services.chat.prompts import build_system_prompt
@@ -525,6 +527,13 @@ async def stream_consultation_reply(
             {"role": m.role, "content": m.content} for m in reversed(list(history))
         )
         llm_messages.append({"role": "user", "content": content})
+        # 졸업생 적합성 상담은 로드맵 도구 대신 학과 조회 도구만 준다. 계획을
+        # 만들 수단(propose_draft_plan 등)은 아예 주지 않아, 챗봇이 로드맵을
+        # 저장하려 시도할 수 없게 하면서도 목표 학과의 실제 입시 데이터는 조회하게 한다.
+        is_graduate_fit = session.kind == ConsultationKind.GRADUATE_FIT.value
+        consultation_tools = (
+            GRADUATE_FIT_TOOL_SPECS if is_graduate_fit else CONSULTATION_TOOL_SPECS
+        )
 
         applied_actions: list[dict[str, Any]] = []
         answer_parts: list[str] = []
@@ -535,7 +544,7 @@ async def stream_consultation_reply(
                 round_text: list[str] = []
                 tool_calls: dict[int, dict[str, Any]] = {}
 
-                async for chunk in stream_chat(llm_messages, CONSULTATION_TOOL_SPECS):
+                async for chunk in stream_chat(llm_messages, consultation_tools):
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -600,9 +609,14 @@ async def stream_consultation_reply(
                         arguments = {}
                         result: dict[str, Any] = {"error": "도구 인자를 해석하지 못했습니다"}
                     else:
-                        result = await execute_consultation_tool(
-                            db, user, session, call["name"], arguments
-                        )
+                        if is_graduate_fit:
+                            result = await execute_graduate_fit_tool(
+                                db, user, session, call["name"], arguments
+                            )
+                        else:
+                            result = await execute_consultation_tool(
+                                db, user, session, call["name"], arguments
+                            )
 
                     action = {"tool": call["name"], "arguments": arguments, "result": result}
                     applied_actions.append(action)

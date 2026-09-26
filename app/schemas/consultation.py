@@ -8,7 +8,7 @@ class ConsultationStatusResponse(BaseModel):
     """관문 판정 결과. 프론트는 이 하나만 보고 게이트를 그릴지 결정한다."""
 
     satisfied: bool
-    required_kind: Literal["initial", "semester_review"] | None = None
+    required_kind: Literal["initial", "semester_review", "graduate_fit"] | None = None
     target_grade: int | None = None
     target_semester: int | None = None
     resumable_session_id: uuid.UUID | None = None
