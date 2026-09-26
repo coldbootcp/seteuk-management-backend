@@ -19,6 +19,7 @@ from app.services.parser.grades import (
     parse_academic_performance,
     parse_academic_performance_from_text,
 )
+from app.services.parser.identity import parse_student_name
 from app.services.parser.llm import get_provider, parse_block
 from app.services.parser.prompts import (
     CHANGCHE_SYSTEM_PROMPT,
@@ -161,6 +162,7 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     academic_performance = parse_academic_performance_from_text(
         sections.get("교과학습발달상황", "")
     ) or parse_academic_performance(sections.get("교과학습발달상황", ""))
+    student_name = parse_student_name(sections.get("인적사항", ""))
     # 날짜만 있는 기록(수상)에 학년을 붙이려면 기준점이 먼저 있어야 한다.
     freshman_academic_year = parse_freshman_academic_year(sections.get("학적사항", ""))
     awards = parse_awards(tables, freshman_academic_year)
@@ -175,6 +177,7 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     llm_activities, errors = await _run_llm_jobs(jobs)
 
     return SeteukAnalysisResult(
+        student_name=student_name,
         freshman_academic_year=freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,

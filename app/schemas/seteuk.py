@@ -114,6 +114,9 @@ class ParseError(BaseModel):
 
 
 class SeteukAnalysisResult(BaseModel):
+    # 인적사항이 밝힌 학생 성명. 읽지 못하면 None이며, 그때는 화면이 직접
+    # 입력받는다. 온보딩에서 기본 정보를 자동 기입·잠금하는 근거가 된다.
+    student_name: str | None = None
     # 학적사항이 밝힌 "1학년이었던 학년도". 날짜만 있는 기록(수상 등)을 학년-학기로
     # 옮기는 기준점이며, 반영할 때 사용자에 저장해 이후에도 쓴다.
     freshman_academic_year: int | None = None
