@@ -53,10 +53,24 @@ MAX_TOOL_ROUNDS = 4
 TITLE_LIMIT = 60
 
 _GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
+# 요약에서 모델이 "1-1: …", "2-1(이번 학기)"처럼 줄여 쓰는 학기 표기. "1-2개"
+# 같은 수량 표현과 헷갈리지 않도록 뒤에 콜론·괄호·쉼표·"학기"가 올 때만 인정한다.
+_SHORT_PERIOD = re.compile(r"(?<![\d-])([1-3])-([1-2])(?=\s*(?:[:(（,)\]]|학기))")
+_EXIT_NOTICE = "나가기 버튼"
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_BUTTON_FOLLOW_UP = re.compile(r"누르|눌러|버튼")
+_LINE_PREFIX = re.compile(r"^[\s\-*•#>]*(?:\d+[.)]\s*)?")
+# 줄머리로 보는 범위. "후보 1. 1학년 …"처럼 짧은 머리말 뒤에 오는 학기까지 포함한다.
+_HEADING_PERIOD_MAX_OFFSET = 8
 _LIST_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s")
-_UNVERIFIED_COURSE_PLACEHOLDER = "실제 수강 중인 관련 과목"
+# 도구를 부르기 직전에 문장을 끝맺지 못하고 남긴 짧은 조각("그럼", "그러면 이제").
+_DANGLING_FRAGMENT_MAX = 12
+_SENTENCE_END = re.compile(r"[.!?…:)\]*]\s*$|[요다죠네까]\s*$")
+_UNVERIFIED_COURSE_PLACEHOLDER = "관련 교과"
 _REPEATED_COURSE_PLACEHOLDER = re.compile(
     rf"{_UNVERIFIED_COURSE_PLACEHOLDER}(?:\s*[·,/]\s*{_UNVERIFIED_COURSE_PLACEHOLDER})+"
+    # "물리학Ⅰ 교과 개념"을 바꾸면 "관련 교과 교과 개념"이 되므로 뒤의 "교과"도 삼킨다.
+    rf"|{_UNVERIFIED_COURSE_PLACEHOLDER}\s+교과(?![가-힣])"
 )
 _SIX_SEMESTER_LANGUAGE = re.compile(
     r"(?:앞으로\s*)?6(?:개)?\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획|구성))?"
@@ -106,8 +120,81 @@ _UNVERIFIED_PLAN_CLAIM = re.compile(
 )
 
 
+def _drop_dangling_fragment(text: str) -> str:
+    """도구 호출 직전 라운드의 끝에 남은, 문장으로 끝맺지 못한 짧은 조각을 지운다.
+
+    모델이 "그럼"까지만 쓰고 도구를 부르면, 다음 라운드 문장과 문단 구분으로
+    이어 붙여져 뜬금없는 한 단어 문단이 남았다(실제 응답에서 관측).
+    """
+    lines = text.rstrip().splitlines()
+    if lines:
+        last = lines[-1].strip()
+        if last and len(last) <= _DANGLING_FRAGMENT_MAX and not _SENTENCE_END.search(last):
+            lines = lines[:-1]
+    return "\n".join(lines)
+
+
 def _period_index(grade: int, semester: int) -> int:
     return (grade - 1) * 2 + (semester - 1)
+
+
+def _line_periods(line: str) -> list[int]:
+    """한 줄이 언급하는 학기들의 순번. 학기 없이 학년만 쓰면 그 학년 1학기로 본다."""
+    periods = [
+        _period_index(int(grade), int(semester or "1"))
+        for grade, semester in _GRADE_PERIOD.findall(line)
+    ]
+    periods.extend(
+        _period_index(int(grade), int(semester))
+        for grade, semester in _SHORT_PERIOD.findall(line)
+    )
+    return periods
+
+
+def _heading_period(line: str) -> int | None:
+    """줄머리(목록 기호·굵게 표시를 뺀 첫 몇 글자)에 적힌 학기 — 그 줄이 무엇에 관한
+    줄인지. 본문 중간에 "1학년에서 다룬 것을 심화"처럼 지난 학기를 출처로 짚는
+    것은 줄의 주제가 아니므로 None이다."""
+    head = _LINE_PREFIX.sub("", line).replace("**", "").lstrip("[")
+    candidates = [
+        (match.start(), _period_index(int(match[1]), int(match[2] or "1")))
+        for match in _GRADE_PERIOD.finditer(head)
+    ] + [
+        (match.start(), _period_index(int(match[1]), int(match[2])))
+        for match in _SHORT_PERIOD.finditer(head)
+    ]
+    if not candidates:
+        return None
+    position, period = min(candidates)
+    return period if position <= _HEADING_PERIOD_MAX_OFFSET else None
+
+
+def _drop_repeated_exit_notice(text: str, *, already_given: bool) -> str:
+    """한 턴 안에서 "나가기 버튼" 안내는 처음 한 문장만 남긴다.
+
+    도구 호출 전후 라운드에 걸쳐, 또 한 문단 안에서도 모델이 같은 안내를 두세 번
+    되풀이한 실제 응답이 있었다. already_given이면 이 텍스트의 안내 문장을 모두
+    지운다.
+    """
+    given = already_given
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        kept_sentences: list[str] = []
+        dropped_notice = False
+        for sentence in _SENTENCE_SPLIT.split(line):
+            if _EXIT_NOTICE in sentence:
+                if given:
+                    dropped_notice = True
+                    continue
+                given = True
+            elif dropped_notice and _BUTTON_FOLLOW_UP.search(sentence):
+                # "지금 누르시면 돼요"처럼 방금 지운 안내에 기대는 문장도 함께 지운다.
+                continue
+            dropped_notice = False
+            kept_sentences.append(sentence)
+        if kept_sentences or not line.strip():
+            kept_lines.append(" ".join(kept_sentences))
+    return "\n".join(kept_lines)
 
 
 def filter_consultation_output_for_period(
@@ -139,11 +226,11 @@ def filter_consultation_output_for_period(
             if line.strip() and line[:1].isspace() and not _LIST_ITEM.match(line):
                 continue
             dropping_item_body = False
-        periods = _GRADE_PERIOD.findall(line)
-        mentions_past = any(
-            _period_index(int(grade), int(semester or "1")) < current
-            for grade, semester in periods
-        )
+        # 지난 학기에 관한 줄(줄머리에 지난 학기가 적힌 줄)만 지운다. 이전에는 한
+        # 번이라도 지난 학기를 언급하면 지웠는데, "2학년: 1학년에서 다룬 원리를
+        # 심화"처럼 인과 사슬을 설명하는 현재·미래 줄까지 사라졌다(실제 응답에서 관측).
+        heading = _heading_period(line)
+        mentions_past = heading is not None and heading < current
         if not mentions_past:
             kept.append(line)
         elif _LIST_ITEM.match(line):
@@ -172,10 +259,7 @@ def filter_consultation_output_for_period(
     if not has_current_course_data:
         filtered = "\n".join(
             line
-            if any(
-                _period_index(int(grade), int(semester or "1")) > current
-                for grade, semester in _GRADE_PERIOD.findall(line)
-            )
+            if any(period > current for period in _line_periods(line))
             else _REPEATED_COURSE_PLACEHOLDER.sub(
                 _UNVERIFIED_COURSE_PLACEHOLDER,
                 _UNVERIFIED_SPECIFIC_COURSE.sub(_UNVERIFIED_COURSE_PLACEHOLDER, line),
@@ -596,7 +680,7 @@ async def stream_consultation_reply(
 
                 raw_text = "".join(round_text)
                 visible_text = filter_consultation_output_for_period(
-                    raw_text,
+                    _drop_dangling_fragment(raw_text) if tool_calls else raw_text,
                     target_grade=session.target_grade,
                     target_semester=session.target_semester,
                     school_record_status=context["school_record_coverage"]["status"],
@@ -614,6 +698,10 @@ async def stream_consultation_reply(
                         str(node.get("title", "")) for node in (roadmap_summary or [])
                     ],
                 )
+                visible_text = _drop_repeated_exit_notice(
+                    visible_text,
+                    already_given=any(_EXIT_NOTICE in part for part in answer_parts),
+                ).strip()
                 if visible_text:
                     if answer_parts:
                         answer_parts.append("\n\n")
@@ -669,6 +757,16 @@ async def stream_consultation_reply(
                             "content": json.dumps(result, ensure_ascii=False, default=str),
                         }
                     )
+
+                # 마무리 신호가 받아들여졌고 이 턴에 이미 학생에게 한 말이 있으면
+                # 여기서 턴을 끝낸다. 한 라운드를 더 돌리면 모델이 방금 한 요약과
+                # "나가기 버튼" 안내를 다시 되풀이했다(실제 응답에서 관측).
+                if answer_parts and any(
+                    action["tool"] == "signal_ready_to_conclude"
+                    and "error" not in (action["result"] or {})
+                    for action in applied_actions
+                ):
+                    break
             else:
                 logger.warning(
                     "consultation tool loop hit the round limit: session_id=%s", session_id
