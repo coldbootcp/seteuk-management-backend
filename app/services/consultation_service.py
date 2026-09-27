@@ -9,7 +9,7 @@ roadmap_plan_events에 반영된다 — "버튼을 누르기 전까지는 확정
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -18,7 +18,12 @@ from app.core.exceptions import (
     ProfileIncompleteError,
 )
 from app.models.consultation import ConsultationKind, ConsultationSession, ConsultationStatus
-from app.models.conversation import Conversation, ConversationPurpose
+from app.models.conversation import (
+    Conversation,
+    ConversationPurpose,
+    Message,
+    MessageRole,
+)
 from app.models.roadmap import (
     Roadmap,
     RoadmapNode,
@@ -37,6 +42,10 @@ from app.services.roadmap.templates import (
     active_index,
 )
 from app.services.roadmap_service import get_active_roadmap, list_nodes
+
+# 졸업생 적합성 상담을 마치기 전에 학생이 최소 몇 번은 말을 걸어야 하는지.
+# 로드맵 draft 같은 "충분히 상담했다"는 관문이 없어, 0턴 통과를 막는 최소선이다.
+GRADUATE_FIT_MIN_USER_MESSAGES = 2
 
 
 async def has_concluded_for_period(
@@ -355,13 +364,27 @@ async def conclude(
     챗봇이 signal_ready_to_conclude를 부른 뒤 학생이 실제로 나가기 버튼을 눌러야
     한다는 요구를 그대로 구현한다."""
     # 졸업생 적합성 상담은 로드맵을 만들지 않는다 — draft_plan 없이 대화만으로
-    # 끝나며, 세션만 완료 처리한다. 재학생 상담은 기존대로 draft_plan을 요구한다.
+    # 끝나며, 세션만 완료 처리한다. 다만 로드맵 draft라는 "충분히 상담했다"는
+    # 자연스러운 관문이 없으므로, 대화를 한 마디도 안 하고 통과하는 것을 막기 위해
+    # 학생이 최소 GRADUATE_FIT_MIN_USER_MESSAGES번은 말을 걸었어야 마칠 수 있게 한다.
     if session.kind == ConsultationKind.GRADUATE_FIT.value:
         if session.status not in (
             ConsultationStatus.READY.value,
             ConsultationStatus.IN_PROGRESS.value,
         ):
             raise ConsultationNotReadyError("상담 세션 상태가 올바르지 않습니다")
+        user_message_count = await db.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.conversation_id == session.conversation_id,
+                Message.role == MessageRole.USER.value,
+            )
+        )
+        if (user_message_count or 0) < GRADUATE_FIT_MIN_USER_MESSAGES:
+            raise ConsultationNotReadyError(
+                "상담을 마치기 전에 목표 학과와 적합성에 대해 조금 더 이야기해 주세요"
+            )
         session.status = ConsultationStatus.CONCLUDED.value
         session.concluded_at = datetime.now(UTC)
         await db.commit()
