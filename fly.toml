@@ -6,6 +6,12 @@ primary_region = "nrt"
 [build]
   dockerfile = "Dockerfile"
 
+# 기본값 256MB는 부팅 중(마이그레이션 + uvicorn 기동)에 OOM으로 죽는다 —
+# 첫 배포에서 실제로 겪은 문제라 명시해 둔다.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"
+
 [env]
   PORT = "8000"
   ENVIRONMENT = "production"
