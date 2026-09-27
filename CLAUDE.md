@@ -341,6 +341,39 @@ docs/
   FastAPI 자체 기본 핸들러처럼 `jsonable_encoder`로 감싸 수정 — 앞으로 어떤
   검증기가 `ValueError`를 던지든 이 자리에서 다시 안 죽는다.
 
+- [x] **첫 프로덕션 배포 + dev/prod 환경 분리** — 백엔드는 Fly.io(`seteuk-backend`,
+  Fly Postgres `seteuk-backend-db`), 프론트엔드는 Vercel(`seteuk.site`·
+  `www.seteuk.site`·`manage.seteuk.site`)에 배포함. 배포 중 두 가지 별개 결함을
+  발견·수정: (1) 로컬 개발용 Postgres가 기본 계정(`postgres`/`postgres`)으로
+  인터넷에 노출돼 랜섬웨어 스캔에 뚫려 있었다 — `docker-compose.yml`의 포트를
+  `127.0.0.1`로 좁힘. (2) `Dockerfile`의 `COPY . .`가 `uv sync` **이후**에 실행돼
+  로컬 macOS용 `.venv`가 컨테이너의 Linux venv를 덮어썼다 — 매 부팅마다 의존성을
+  통째로 재설치하며 256MB 머신에서 OOM으로 죽던 원인이었다. `.dockerignore`로
+  해결. 이 과정에서 **Fly의 unmanaged Postgres는 내부망(`*.flycast`) 연결에 TLS를
+  아예 지원하지 않는다**는 것도 확인함(WireGuard로 이미 암호화된 구간이라
+  `sslmode=disable`이 Fly 자신의 기본 구성) — 공인 IP가 없는 private ingress라
+  외부 노출 경로는 아니다.
+  이어서 **보안 점검**을 거쳐 운영 환경에서 `/docs`·`/redoc`·`/openapi.json`을
+  끄고(`app/main.py`의 `_is_hardened_environment`, `rate_limit.py`와 같은
+  `{"production","prod","staging"}` 기준), `X-Content-Type-Options`·
+  `X-Frame-Options`·`Referrer-Policy`·`Permissions-Policy`·CSP(`default-src
+  'none'`)·HSTS를 얹는 `SecurityHeadersMiddleware`를 추가함(순수 JSON API라
+  CSP를 전부 막아도 무방).
+  마지막으로 **dev/prod를 완전히 분리**함(사용자 요청 — dev 작업 중 사고가
+  나도 운영이 안 깨지게). `main` 브랜치 = 운영, 새 `dev` 브랜치 = 개발.
+  Fly 앱·Postgres·시크릿을 각각 별도로 둠(`seteuk-backend-dev` +
+  `seteuk-backend-dev-db`, `JWT_SECRET`도 운영과 다른 값). dev 전용 배포
+  설정은 `fly.dev.toml`(`flyctl deploy --config fly.dev.toml --app
+  seteuk-backend-dev`)에 있고, `min_machines_running = 0`이라 안 쓸 때는
+  완전히 꺼진다(운영은 `fly.toml`대로 1대 상시 유지). 두 파일 다 머신 메모리를
+  `1024mb`로 명시함 — 기본값 256MB로 실제 OOM을 두 번(운영 최초 배포, dev
+  최초 배포) 겪었다. dev의 `CORS_ORIGINS`/`FRONTEND_BASE_URL`은
+  `https://dev-manage.seteuk.site`로 운영과 분리. 프론트엔드는 Vercel
+  GitHub App이 `coldbootcp` 조직에 아직 연결되지 않아 push마다 자동 배포되지
+  않는다 — 지금은 `vercel deploy`(dev) / `vercel deploy --prod`(운영) 수동
+  실행 후 해당 도메인에 `vercel alias set`으로 붙인다. GitHub 연결이 끝나면
+  이 수동 단계는 없어진다.
+
 ## 알려진 한계 / 다음에 손볼 것
 
 - **비동기 job이 FastAPI BackgroundTasks에 묶여 있다.** 파싱·진단이 API 프로세스와 생사를 같이 하므로 배포 때마다 진행 중 job이 죽는다(기동 시 실패 처리로 사용자 경험만 막아둔 상태). 트래픽이 늘면 워커 큐(Celery/ARQ 등)로 분리해야 한다.
