@@ -53,6 +53,11 @@ MAX_TOOL_ROUNDS = 4
 TITLE_LIMIT = 60
 
 _GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s")
+_UNVERIFIED_COURSE_PLACEHOLDER = "실제 수강 중인 관련 과목"
+_REPEATED_COURSE_PLACEHOLDER = re.compile(
+    rf"{_UNVERIFIED_COURSE_PLACEHOLDER}(?:\s*[·,/]\s*{_UNVERIFIED_COURSE_PLACEHOLDER})+"
+)
 _SIX_SEMESTER_LANGUAGE = re.compile(
     r"(?:앞으로\s*)?6(?:개)?\s*학기(?:의\s*(?:탐구\s*)?(?:여정|흐름|계획|구성))?"
 )
@@ -81,6 +86,8 @@ _METHOD_PREFERENCE_REASK = re.compile(
 )
 _UNVERIFIED_SPECIFIC_COURSE = re.compile(
     r"(?:국어|영어|수학|물리(?:학)?|화학|생명과학|지구과학|통합과학|정보)\s*[ⅠⅡIVX0-9]+"
+    # "수학Ⅰ·Ⅱ"처럼 로마 숫자만 이어 붙인 표기도 한 과목명으로 삼킨다.
+    r"(?:\s*[·/]\s*[ⅠⅡ]+)*"
 )
 _INTERNAL_DRAFT_RETRY = re.compile(
     r"(?:설계|계획)\s*(?:저장\s*)?형식이\s*잘못되어\s*다시\s*시도하겠습니다\.?\s*"
@@ -122,7 +129,16 @@ def filter_consultation_output_for_period(
     """
     current = _period_index(target_grade, target_semester)
     kept: list[str] = []
+    # 과거 학기를 머리로 단 목록 항목을 지우면, 그 아래 들여쓴 설명 줄도 함께
+    # 지운다. 머리만 지우면 어느 학기 얘기인지 모를 설명만 덩그러니 남았다(실제
+    # 응답에서 관측 — 3개년 로드맵을 "- **1학년 1학기 — 주제**" 다음 줄에 설명을
+    # 들여 쓰는 형식으로 답할 때).
+    dropping_item_body = False
     for line in text.splitlines():
+        if dropping_item_body:
+            if line.strip() and line[:1].isspace() and not _LIST_ITEM.match(line):
+                continue
+            dropping_item_body = False
         periods = _GRADE_PERIOD.findall(line)
         mentions_past = any(
             _period_index(int(grade), int(semester or "1")) < current
@@ -130,6 +146,8 @@ def filter_consultation_output_for_period(
         )
         if not mentions_past:
             kept.append(line)
+        elif _LIST_ITEM.match(line):
+            dropping_item_body = True
 
     filtered = "\n".join(kept)
     if current > 0:
@@ -149,8 +167,21 @@ def filter_consultation_output_for_period(
     # 수강 과목이 아직 등록되지 않았는데 특정 교과를 실제 수강 중인 것처럼
     # 연결한 실제 응답을 막는다. 주제 설명은 보존하고, 확인되지 않은 과목명만
     # 중립적인 표현으로 바꾼다.
+    # 다음 학기 이후를 말하는 줄은 건드리지 않는다 — 앞으로 들을 과목을 연계
+    # 교과로 제안하는 것은 수강 사실을 단정하는 말이 아니다.
     if not has_current_course_data:
-        filtered = _UNVERIFIED_SPECIFIC_COURSE.sub("실제 수강 중인 관련 과목", filtered)
+        filtered = "\n".join(
+            line
+            if any(
+                _period_index(int(grade), int(semester or "1")) > current
+                for grade, semester in _GRADE_PERIOD.findall(line)
+            )
+            else _REPEATED_COURSE_PLACEHOLDER.sub(
+                _UNVERIFIED_COURSE_PLACEHOLDER,
+                _UNVERIFIED_SPECIFIC_COURSE.sub(_UNVERIFIED_COURSE_PLACEHOLDER, line),
+            )
+            for line in filtered.splitlines()
+        )
 
     # 초안 도구의 재시도는 모델 내부 처리일 뿐 학생이 볼 오류가 아니다. 또한
     # 상담 완료 전에는 계획이 확정·저장된 것이 아니므로 표현을 바로잡는다.

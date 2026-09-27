@@ -161,3 +161,38 @@ def test_filter_keeps_a_claim_about_a_real_existing_plan_title() -> None:
 
     assert "반도체 소자 물리 탐구" in result
 
+
+def test_filter_drops_indented_body_of_a_removed_past_semester_item() -> None:
+    result = filter_consultation_output_for_period(
+        """**[3개년 학술 로드맵 큰 그림]**
+
+- **1학년 1학기 — 도체와 반도체의 차이 규명 (통합과학)**
+  원자 구조 관점에서 전기가 통하는 조건을 묻는 단계예요.
+
+- **2학년 1학기(지금) — 논리 게이트와 불 대수**
+  트랜지스터로 게이트를 구성합니다.""",
+        target_grade=2,
+        target_semester=1,
+    )
+
+    assert "1학년" not in result
+    assert "원자 구조" not in result
+    assert "2학년 1학기(지금)" in result
+    assert "트랜지스터로 게이트를 구성합니다." in result
+
+
+def test_filter_keeps_future_semester_courses_and_collapses_placeholders() -> None:
+    result = filter_consultation_output_for_period(
+        """- **2학년 1학기 — 논리 게이트 (물리학Ⅰ·정보2)**
+- **2학년 1학기 — 함수 해석 (수학Ⅰ·Ⅱ)**
+- **2학년 2학기 — MOSFET 모델링 (물리학Ⅱ·미적분)**""",
+        target_grade=2,
+        target_semester=1,
+        has_current_course_data=False,
+    )
+
+    assert "물리학Ⅰ" not in result
+    assert "(실제 수강 중인 관련 과목)" in result
+    assert "실제 수강 중인 관련 과목·실제 수강 중인 관련 과목" not in result
+    assert "물리학Ⅱ·미적분" in result
+    assert "·Ⅱ" not in result.replace("물리학Ⅱ·미적분", "")
