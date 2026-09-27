@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.consultation import ConsultationSession, ConsultationStatus
 from app.models.usage_event import UsageAction
 from app.models.user import User
+from app.schemas.chat import MessageRead
 from app.schemas.consultation import (
     ConfirmFullReplanRequest,
     ConsultationMessageCreate,
@@ -62,6 +63,34 @@ async def get_session(
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_session(db, user.id, session_id)
     return _to_read(session)
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
+async def list_session_messages(
+    session_id: uuid.UUID,
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[MessageRead]:
+    session = await consultation_service.get_session(db, user.id, session_id)
+    messages = await chat_service.list_messages(db, user.id, session.conversation_id)
+    return [MessageRead.model_validate(m) for m in messages]
+
+
+@router.post("/sessions/{session_id}/opening")
+async def stream_opening(
+    session_id: uuid.UUID,
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> StreamingResponse:
+    """세션이 새로 열렸을 때 챗봇이 먼저 건네는 첫 인사를 스트리밍한다. 이미
+    메시지가 있는(재개하는) 세션에서는 화면이 이 엔드포인트를 부르지 않는다 —
+    대신 위 GET .../messages로 기존 대화를 이어 보여준다."""
+    await consultation_service.get_session(db, user.id, session_id)
+    return StreamingResponse(
+        chat_service.stream_consultation_opening(user.id, session_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/sessions/{session_id}/messages")

@@ -104,7 +104,28 @@ def test_filter_removes_premature_draft_confirmation_claim() -> None:
     assert "나가기 버튼" in result
 
 
-def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
+def test_filter_does_not_claim_missing_activities_while_school_record_pending() -> None:
+    """학생부 PDF는 있지만 처리가 아직 안 끝난 상태(processing/failed/
+    awaiting_import)에서는 "아직 반영되지 않았다"는 안내문을 붙인다 — 실제로
+    처리 중인 일이라 정확한 표현이다."""
+    result = filter_consultation_output_for_period(
+        "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
+        "현재 학기에는 소자 물리 주제를 우선 검토해 보세요.",
+        target_grade=2,
+        target_semester=2,
+        school_record_status="processing",
+    )
+
+    assert "전혀 기록되지" not in result
+    assert "확인할 수 없습니다" in result
+    assert "현재 학기" in result
+
+
+def test_filter_does_not_repeat_reflection_notice_when_never_uploaded() -> None:
+    """생기부를 애초에 올린 적 없는 학생(not_uploaded)에게는 "아직 반영되지
+    않았다"는 문구를 매 턴 반복해서 붙이지 않는다 — 처리 중인 일이 아니므로
+    부정확하고, 반복되면 불필요하게 거슬린다는 사용자 피드백에 따른 것이다.
+    과대 단정 문장 자체는 여전히 지운다."""
     result = filter_consultation_output_for_period(
         "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
         "현재 학기에는 소자 물리 주제를 우선 검토해 보세요.",
@@ -114,7 +135,7 @@ def test_filter_does_not_claim_missing_activities_without_school_record() -> Non
     )
 
     assert "전혀 기록되지" not in result
-    assert "확인할 수 없습니다" in result
+    assert "반영되지" not in result
     assert "현재 학기" in result
 
 
@@ -139,3 +160,4 @@ def test_filter_keeps_a_claim_about_a_real_existing_plan_title() -> None:
     )
 
     assert "반도체 소자 물리 탐구" in result
+

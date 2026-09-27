@@ -103,10 +103,32 @@ _NODE_SCHEMA = {
         "grade": {"type": "integer"},
         "semester": {"type": "integer"},
         "narrative_stage": {"type": "string", "enum": _STAGE_NAMES},
-        "title": {"type": "string"},
-        "objective": {"type": "string"},
-        "candidate_subjects": {"type": "array", "items": {"type": "string"}},
-        "competency_goals": {"type": "array", "items": {"type": "string"}},
+        "title": {
+            "type": "string",
+            "description": (
+                "10~30자 내외의 구체적 학술 연구 테마(추상적 수식어 금지, "
+                "예: '불 대수 기반 디지털 논리 회로 설계 및 연산 원리 규명')"
+            ),
+        },
+        "objective": {
+            "type": "string",
+            "description": (
+                "2~3문장으로 교과목 개념 연계, 핵심 작동 원리/메커니즘, 학술적 탐구 목적을 "
+                "구체적으로 서술"
+            ),
+        },
+        "candidate_subjects": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "실제 연계 교과목 1~3개(예: ['공통수학', '정보'])",
+        },
+        "competency_goals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "실질적 학업/탐구 역량 1~2개(예: ['수리 논리 모델링', '알고리즘 복잡도 분석'])"
+            ),
+        },
     },
     "required": ["grade", "semester", "narrative_stage", "title", "objective"],
 }
@@ -130,10 +152,12 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "propose_draft_plan",
         "지금까지 대화로 정한 계획을 초안으로 저장한다(아직 확정 아님). 최초 상담이나 "
         "재평가의 전체 재설계에서는 mode=full_replan과 nodes(정확히 6개, 1학년 1학기~"
-        "3학년 2학기 순서)를 채운다. 재평가의 기본 경로에서는 mode=current_node_only로 "
-        "nodes를 비운다. current_node(이번 학기 목표)와 plan_events(이번 학기에 바로 "
-        "실행할 탐구 주제 10개, core 4 + optional 6)는 매번 채운다. 학생이 반려하면 "
-        "다시 호출해 덮어써라.",
+        "3학년 2학기 순서)를 채운다. nodes의 각 마디는 '기초 탐색', '역량 강화' 같은 "
+        "추상적 수식어가 아니라 학생의 목표 전공과 연계된 구체적 학술 테마(title)와 "
+        "교과목 연계 탐구 목적(objective)을 담아야 한다. 재평가의 기본 경로에서는 "
+        "mode=current_node_only로 nodes를 비운다. current_node(이번 학기 목표)와 "
+        "plan_events(이번 학기에 바로 실행할 탐구 주제 10개, core 4 + optional 6)는 "
+        "매번 채운다. 학생이 반려하면 다시 호출해 덮어써라.",
         {
             "mode": {"type": "string", "enum": ["full_replan", "current_node_only"]},
             "career_track": {"type": "string"},

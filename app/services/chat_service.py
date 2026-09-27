@@ -171,17 +171,27 @@ def filter_consultation_output_for_period(
     )
 
     # 프롬프트만으로는 '활동 배열이 비었다'는 이유로 과거 활동이 없다고 단정하는
-    # 실제 DeepSeek 응답을 막지 못했다. 학생부가 아직 반영되지 않았으면 문장 자체를
-    # 제거하고, 확인 범위를 명시한 사실 문장으로 한 번만 바꾼다.
+    # 실제 DeepSeek 응답을 막지 못했다. 학생부 처리가 아직 안 끝났으면(업로드는
+    # 했다) 문장 자체를 제거하고 확인 범위를 명시한 사실 문장으로 바꾼다.
+    #
+    # not_uploaded(애초에 올린 적이 없는 학생)는 여기서 뺀다 — "아직 반영되지
+    # 않았다"는 처리 중인 일에 쓰는 말인데, 이 학생에게는 매 턴 반복해서 그렇게
+    # 말하는 것 자체가 어색하고 불필요하다(사용자 피드백). 이 학생에게는 과대
+    # 단정 문장만 조용히 지우고 별도 안내문을 매번 덧붙이지 않는다 — 시스템
+    # 프롬프트(3-2)가 필요하면 한 번만 자연스럽게 짚도록 이미 안내한다.
     if school_record_status in _RECORD_COVERAGE_UNAVAILABLE:
         lines = filtered.splitlines()
         kept_lines = [line for line in lines if not _UNVERIFIED_RECORD_ABSENCE.search(line)]
         if len(kept_lines) != len(lines):
-            filtered = (
-                "학생부가 아직 반영되지 않아 이전 활동의 존재 여부는 확인할 수 없습니다. "
-                "현재 저장된 기록이 비어 있다는 사실만으로 활동이 없었다고 판단하지 않습니다.\n\n"
-                + "\n".join(kept_lines)
-            )
+            if school_record_status == "not_uploaded":
+                filtered = "\n".join(kept_lines)
+            else:
+                notice = (
+                    "학생부가 아직 반영되지 않아 이전 활동의 존재 여부는 확인할 수 "
+                    "없습니다. 현재 저장된 기록이 비어 있다는 사실만으로 활동이 "
+                    "없었다고 판단하지 않습니다."
+                )
+                filtered = notice + "\n\n" + "\n".join(kept_lines)
 
     return re.sub(r"\n{3,}", "\n\n", filtered).strip()
 
@@ -675,4 +685,139 @@ async def stream_consultation_reply(
                 "ready": session.status == ConsultationStatus.READY.value,
                 "full_replan_confirmed": session.full_replan_confirmed_at is not None,
             },
+        )
+
+
+async def stream_consultation_opening(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> AsyncIterator[str]:
+    """상담 세션이 새로 열렸을 때 챗봇이 먼저 건네는 첫 인사.
+
+    학생이 아직 아무 말도 하지 않은 상태에서 모델이 직접 여는 말을 짓는다. 화면이
+    미리 적어 둔 고정 문구(예: "방금 만든 정밀 진단 리포트를 보고 있다")는 진단
+    근거가 없을 때도 항상 같은 말을 해 학생을 당황시켰다 — 이 턴은 실제
+    <진단_결과>·<학생_데이터>를 본 모델이 직접 여는 말을 짓게 해 그 문제를 없앤다.
+
+    이미 대화가 시작된(메시지가 있는) 세션에서는 다시 부르지 않는다 — 호출 측
+    (화면)이 메시지 목록이 비었을 때만 이 엔드포인트를 부르지만, 방어적으로
+    여기서도 한 번 더 막는다.
+
+    비용 관점에서 `enforce_daily_limit`은 걸지 않는다 — 세션당 한 번만 나가는
+    필수 관문의 시스템 발화라, 걸면 이미 그날 대화 한도를 다 쓴 학생이 정작
+    관문 자체를 시작하지 못하고 갇히게 된다.
+    """
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is None:
+            yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
+            return
+
+        try:
+            session = await consultation_service.get_session(db, user_id, session_id)
+        except ConsultationSessionNotFoundError as exc:
+            yield _sse(
+                "error",
+                {"error_code": "CONSULTATION_SESSION_NOT_FOUND", "message": exc.message},
+            )
+            return
+
+        conversation_id = session.conversation_id
+        already_started = await db.scalar(
+            select(Message.id).where(Message.conversation_id == conversation_id).limit(1)
+        )
+        if already_started is not None:
+            yield _sse(
+                "error",
+                {
+                    "error_code": "CONSULTATION_ALREADY_STARTED",
+                    "message": "이미 시작된 상담입니다",
+                },
+            )
+            return
+
+        context = await build_context(db, user)
+        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+
+        llm_messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": build_consultation_system_prompt(
+                    session.kind,
+                    json.dumps(context, ensure_ascii=False),
+                    json.dumps(roadmap_summary, ensure_ascii=False)
+                    if roadmap_summary is not None
+                    else None,
+                    opening=True,
+                ),
+            },
+            # 첫 인사를 이끌어낼 최소한의 신호. 학생에게 보이지도, 저장되지도 않는다.
+            {"role": "user", "content": "(상담을 시작해주세요.)"},
+        ]
+
+        round_text: list[str] = []
+        error_payload: dict[str, Any] | None = None
+
+        try:
+            async for chunk in stream_chat(llm_messages, None):
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    round_text.append(delta.content)
+        except asyncio.CancelledError:
+            raw_text = "".join(round_text)
+            visible_text = filter_consultation_output_for_period(
+                raw_text,
+                target_grade=session.target_grade,
+                target_semester=session.target_semester,
+                school_record_status=context["school_record_coverage"]["status"],
+            )
+            await asyncio.shield(
+                _persist_assistant_turn(
+                    db, conversation_id, ChatMode.NORMAL, visible_text, []
+                )
+            )
+            raise
+        except LLMUnavailableError as exc:
+            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
+        except Exception:
+            logger.exception(
+                "consultation opening stream failed: session_id=%s", session_id
+            )
+            error_payload = {
+                "error_code": "LLM_UNAVAILABLE",
+                "message": "잠시 후 다시 시도해주세요",
+            }
+
+        raw_text = "".join(round_text)
+        visible_text = (
+            filter_consultation_output_for_period(
+                raw_text,
+                target_grade=session.target_grade,
+                target_semester=session.target_semester,
+                school_record_status=context["school_record_coverage"]["status"],
+                has_declared_direction=bool(
+                    (context.get("memory", {}).get("career_goal") or {}).get("goal")
+                    or context.get("memory", {}).get("target_department")
+                    or context.get("memory", {}).get("interest_keywords")
+                ),
+            )
+            if raw_text
+            else ""
+        )
+        if visible_text:
+            yield _sse("token", {"delta": visible_text})
+
+        assistant_message = await _persist_assistant_turn(
+            db, conversation_id, ChatMode.NORMAL, visible_text, []
+        )
+
+        if error_payload is not None:
+            yield _sse("error", error_payload)
+            return
+
+        yield _sse(
+            "done",
+            {"message_id": str(assistant_message.id) if assistant_message else None},
         )

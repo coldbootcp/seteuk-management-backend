@@ -136,6 +136,71 @@ async def test_gate_blocks_new_user_until_initial_consultation(
     assert body["required_kind"] == "initial"
 
 
+async def test_opening_turn_is_model_generated_and_persisted(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """학생이 아무 말도 하기 전, 화면이 고정 문구 대신 모델이 직접 지은 여는 말을
+    보여준다는 계약 — 스트리밍으로 나가고, 대화 기록에도 assistant 메시지로 남는다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+    session = (
+        await client.post("/api/v1/consultation/sessions", headers=auth_headers)
+    ).json()
+
+    before = await client.get(
+        f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+    )
+    assert before.json() == []
+
+    _install_stream(monkeypatch, [[_chunk("안녕하세요! 요즘 관심 있는 분야가 있나요?")]])
+
+    response = await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+    events = _parse_sse(response.text)
+    token = next(p for e, p in events if e == "token")
+    assert "안녕하세요" in token["delta"]
+    done = next(p for e, p in events if e == "done")
+    assert done["message_id"] is not None
+
+    after = await client.get(
+        f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+    )
+    messages = after.json()
+    assert len(messages) == 1
+    assert messages[0]["role"] == "assistant"
+    assert "안녕하세요" in messages[0]["content"]
+
+
+async def test_opening_turn_rejected_once_conversation_has_started(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """이미 메시지가 있는 세션(재개하는 상담)에서는 여는 말을 다시 짓지 않는다 —
+    화면이 잘못 두 번 부르더라도 서버가 방어한다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+    session = (
+        await client.post("/api/v1/consultation/sessions", headers=auth_headers)
+    ).json()
+
+    _install_stream(monkeypatch, [[_chunk("안녕하세요!")]])
+    await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+
+    second = await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+    events = _parse_sse(second.text)
+    error = next(p for e, p in events if e == "error")
+    assert error["error_code"] == "CONSULTATION_ALREADY_STARTED"
+
+    messages = (
+        await client.get(
+            f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+        )
+    ).json()
+    assert len(messages) == 1
+
+
 async def test_initial_consultation_conclude_creates_roadmap_and_opens_gate(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,3 +384,41 @@ def _tool_call_chunk(name: str, args: dict[str, Any]) -> SimpleNamespace:
     return _chunk(
         tool_calls=[_tool_call_delta(0, "call_1", name, json.dumps(args, ensure_ascii=False))]
     )
+
+
+def test_initial_consultation_prompt_and_tools_enforce_concrete_roadmap() -> None:
+    """최초 상담 프롬프트와 도구 명세가 추상적 로드맵을 금지하고
+    구체적 학술 서사 3단계 빌드업과 구조화 포맷을 강제하는지 검증."""
+    from app.services.chat.consultation_prompts import (
+        build_consultation_system_prompt,
+    )
+    from app.services.chat.consultation_tools import TOOL_SPECS
+
+    prompt = build_consultation_system_prompt(
+        "initial", context_json="{}", roadmap_summary_json=None
+    )
+
+    # 1. 낡고 추상적인 구태의연한 예시가 제거되었는지 검증
+    assert "기초 탐색 → 구체화 → 심화·확장" not in prompt
+
+    # 2. 추상적 수식어 금지 규칙 포함 검증
+    assert "추상적 수식어" in prompt
+    assert "알맹이 없는" in prompt
+    assert "인과 사슬(Narrative Arc)" in prompt
+
+    # 3. 학술 서사 3단계 빌드업 원칙 포함 검증
+    assert "1학년 (개념 탐색 & 원리 발견)" in prompt
+    assert "2학년 (교과 융합 & 공학적/학술적 모델링)" in prompt
+    assert "3학년 (독립 심화 & 최신 쟁점/한계 극복)" in prompt
+
+    # 4. 대화 내 구조화 포맷 강제 검증
+    assert "[3개년 학술 로드맵 큰 그림]" in prompt
+    assert "[구체적 학술 주제명] (연계교과)" in prompt
+
+    # 5. propose_draft_plan 도구의 nodes 명세에 구체적 테마/목적 지침 포함 검증
+    propose_tool = next(t for t in TOOL_SPECS if t["function"]["name"] == "propose_draft_plan")
+    nodes_schema = propose_tool["function"]["parameters"]["properties"]["nodes"]
+    node_props = nodes_schema["items"]["properties"]
+    assert "구체적 학술 연구 테마" in node_props["title"]["description"]
+    assert "교과목 개념 연계" in node_props["objective"]["description"]
+
