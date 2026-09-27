@@ -24,6 +24,7 @@ from app.schemas.diagnosis import (
     SemesterReview,
     SemesterReviewDraft,
 )
+from app.services.academic_timing import get_academic_timing
 from app.services.diagnosis.data import (
     CareerThreadMaterial,
     SemesterGroup,
@@ -69,7 +70,51 @@ async def extract_interests_from_answers(
     )
 
 
-async def _review_semester(group: SemesterGroup, interests: dict[str, Any]) -> SemesterReview:
+def _timing_context(user: User | None) -> dict[str, Any]:
+    """진단이 학생의 시점(졸업생/재학생, 현재 학기)을 알도록 만드는 맥락.
+
+    이게 없으면 SWOT·학기 평가가 모든 학생을 재학생으로 보고 "남은 기간에 공백을
+    메우라"거나 "3학년 2학기 활동이 없어 위험하다"는 조언을 한다 — 졸업생에게도,
+    3학년 2학기(입시 시기라 활동이 적은 게 정상)에게도 틀린 말이다.
+    """
+    if user is None:
+        return {"is_graduate": False, "summary": ""}
+    timing = get_academic_timing(
+        freshman_academic_year=user.freshman_academic_year,
+        current_grade=user.current_grade,
+        current_semester=user.current_semester,
+    )
+    is_graduate = timing["status"] == "past"
+    if is_graduate:
+        summary = (
+            "이 학생은 이미 졸업한 상태이며, 학교생활기록부는 확정되어 더 바꿀 수 "
+            "없습니다. 따라서 '남은 기간에 활동을 보완하라', '앞으로 공백을 메우라' "
+            "같은 재학생용 조언을 하지 마세요. 있는 기록을 어떻게 해석·활용할지에 "
+            "집중하세요. "
+            "3학년 2학기는 수시 원서 접수·수능을 치르는 입시 시기라 이전 학기보다 "
+            "새 탐구 활동이나 독서 기록이 적은 것이 정상입니다. 3학년 2학기의 기록이 "
+            "적다는 사실 자체를 약점이나 위협으로 규정하지 마세요. 만약 그 시기의 "
+            "기록을 언급해야 한다면, 반드시 '3학년 2학기는 입시를 치르는 시기라 새 "
+            "활동이 적은 것이 자연스럽다'는 맥락을 함께 밝혀, 학생을 탓하는 지적이 "
+            "아니라 시기 특성을 아는 상태의 설명이 되게 하세요."
+        )
+    else:
+        summary = timing["summary"] + (
+            " 특히 3학년 2학기는 수시 원서·수능 등 입시를 치르는 시기라 이전 학기보다 "
+            "새 탐구 활동이 적은 것이 자연스럽습니다. 이 시기의 활동이 적다는 사실을 "
+            "곧바로 약점이나 위험으로 규정하지 말고, 언급이 필요하면 그 시기 특성을 "
+            "함께 밝히세요."
+        )
+    return {
+        "is_graduate": is_graduate,
+        "status": timing["status"],
+        "summary": summary,
+    }
+
+
+async def _review_semester(
+    group: SemesterGroup, interests: dict[str, Any], timing_context: dict[str, Any]
+) -> SemesterReview:
     """학기별 평가 — 그 학기의 성적/독서/활동 원자료만 입력으로 받는다. LLM은
     이 좁은 자료를 세 개의 구체적인 문장으로 옮기는 번역기 역할만 한다."""
     user_content = json.dumps(
@@ -77,6 +122,7 @@ async def _review_semester(group: SemesterGroup, interests: dict[str, Any]) -> S
             "grade": group.grade,
             "semester": group.semester,
             "career_context": interests,
+            "timing_context": timing_context.get("summary", ""),
             "data": group.to_prompt_json(),
         },
         ensure_ascii=False,
@@ -353,11 +399,36 @@ async def _write_knowledge_graph(
     return merged
 
 
+def _semester_activity_facts(groups: list[SemesterGroup]) -> list[dict[str, Any]]:
+    """각 학기에 학기 단위 활동·학년 단위 활동·독서가 실제로 있었는지 코드가
+    판정한 사실. SWOT은 원본을 안 보고 학기 평가 텍스트만 보는데, 그 텍스트가
+    "이 학기 활동 없음"으로 오염되면 SWOT이 공백을 확대 해석한다. 자율·진로활동은
+    학년 단위(year_activities)라 특정 학기 activities가 비어도 실제로는 그 학년에
+    활동이 있는 경우가 많다 — 이 사실을 코드가 못 박아, LLM이 "활동 없음"을
+    단정하지 못하게 한다("프롬프트는 부탁, 코드가 보증")."""
+    return [
+        {
+            "grade": g.grade,
+            "semester": g.semester,
+            "has_semester_activities": len(g.activities) > 0,
+            # 학년 단위 활동(자율·진로활동 등). 이게 있으면 그 학년에는 활동이
+            # 있는 것이며, 특정 학기 activities가 비었다는 이유로 "활동이 없다"고
+            # 말해선 안 된다.
+            "has_year_activities": len(g.year_activities) > 0,
+            "has_reading": len(g.reading_activities) > 0,
+            "has_grades": len(g.academic_performance) > 0,
+        }
+        for g in groups
+    ]
+
+
 async def _write_overall_assessment(
     semester_reviews: list[SemesterReview],
     career_thread: list[CareerThreadEntry],
     activity_inventory: list[ActivityInventoryEntry],
     student_name: str | None,
+    timing_context: dict[str, Any],
+    semester_activity_facts: list[dict[str, Any]],
 ) -> OverallAssessmentDraft:
     """종합 평가(SWOT) — 원본 데이터가 아니라 앞선 세 섹션의 "결과"만 입력으로
     받는다. 생기부를 아예 안 올린 사용자(전부 비어있음)라도 예외 없이 호출되므로,
@@ -366,6 +437,13 @@ async def _write_overall_assessment(
         {
             # 이름이 없으면 모델이 "사용자님" 같은 서비스 말투를 만들어 낸다.
             "student_name": student_name,
+            # 졸업생/재학생·현재 학기 맥락. 이게 없으면 모든 학생을 재학생으로 보고
+            # "남은 기간에 공백을 메우라"는 조언을 한다.
+            "timing_context": timing_context.get("summary", ""),
+            # 학기별 활동/독서 유무를 코드가 판정한 사실. 학기 평가 텍스트가 특정
+            # 학기를 "활동 없음"으로 썼더라도, 여기 has_year_activities가 true이면
+            # 그 학년에는 실제로 활동이 있으므로 "활동 공백"으로 단정하면 안 된다.
+            "semester_activity_facts": semester_activity_facts,
             "semester_reviews": [s.model_dump() for s in semester_reviews],
             "career_thread": [t.model_dump() for t in career_thread],
             "activity_inventory": [e.model_dump(mode="json") for e in activity_inventory],
@@ -415,6 +493,8 @@ async def run_diagnosis_pipeline(
     career_material = await get_career_thread_material(db, user_id)
     activities_by_grade = await get_activities_by_grade(db, user_id)
     grades_trend = await compute_grades_trend(db, user_id)
+    # 졸업생/재학생·현재 학기 맥락을 계산해 학기 평가와 SWOT에 함께 넘긴다.
+    timing_context = _timing_context(user)
 
     # 학기별 평가·진로 유기적 평가·활동 인벤토리·지식 그래프는 서로 입력이
     # 겹치지 않는 독립 섹션이라 함께 병렬 실행한다(전부 LLM 호출만, db 접근 없음).
@@ -424,7 +504,9 @@ async def run_diagnosis_pipeline(
         inventory_batches,
         knowledge_graph_links,
     ) = await asyncio.gather(
-        asyncio.gather(*(_review_semester(g, interests) for g in semester_groups)),
+        asyncio.gather(
+            *(_review_semester(g, interests, timing_context) for g in semester_groups)
+        ),
         _write_career_thread(
             career_material,
             interests,
@@ -451,7 +533,12 @@ async def run_diagnosis_pipeline(
 
     # 종합 평가는 위 세 섹션의 결과만 보고 판단한다 — 원본 데이터를 다시 훑지 않는다.
     overall = await _write_overall_assessment(
-        semester_reviews, career_thread, activity_inventory, user.name if user else None
+        semester_reviews,
+        career_thread,
+        activity_inventory,
+        user.name if user else None,
+        timing_context,
+        _semester_activity_facts(semester_groups),
     )
 
     return (
