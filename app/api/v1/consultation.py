@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.consultation import ConsultationSession, ConsultationStatus
 from app.models.usage_event import UsageAction
 from app.models.user import User
+from app.schemas.chat import MessageRead
 from app.schemas.consultation import (
     ConfirmFullReplanRequest,
     ConsultationMessageCreate,
@@ -64,6 +65,19 @@ async def get_session(
     return _to_read(session)
 
 
+@router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
+async def list_session_messages(
+    session_id: uuid.UUID,
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[MessageRead]:
+    """세션에 오간 대화를 시간순으로 돌려준다. 화면이 상담을 다시 열 때 이 기록으로
+    이전 대화를 복원하고, 비어 있으면 첫 인사(opening)를 새로 요청한다."""
+    session = await consultation_service.get_session(db, user.id, session_id)
+    messages = await chat_service.list_messages(db, user.id, session.conversation_id)
+    return [MessageRead.model_validate(m) for m in messages]
+
+
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: uuid.UUID,
@@ -75,6 +89,22 @@ async def send_message(
     await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
     return StreamingResponse(
         chat_service.stream_consultation_reply(user.id, session_id, data.content),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/sessions/{session_id}/opening")
+async def send_opening(
+    session_id: uuid.UUID,
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> StreamingResponse:
+    """새로 열린 세션의 첫 인사를 챗봇이 먼저 건네게 한다. 화면은 세션에 메시지가
+    하나도 없을 때만 부른다(이미 대화가 있으면 서비스가 조용히 넘긴다)."""
+    await consultation_service.get_session(db, user.id, session_id)
+    return StreamingResponse(
+        chat_service.stream_consultation_opening(user.id, session_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

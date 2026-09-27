@@ -17,7 +17,8 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from pydantic import BaseModel
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -42,7 +43,7 @@ from app.services.chat.consultation_tools import (
 from app.services.chat.context import build_context, prepare_context_for_chat
 from app.services.chat.prompts import build_system_prompt
 from app.services.chat.tools import TOOL_SPECS, execute_tool
-from app.services.llm import stream_chat
+from app.services.llm import call_structured, stream_chat
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +456,149 @@ async def stream_reply(
         )
 
 
+class _SuggestedReplies(BaseModel):
+    """챗봇의 마지막 말에 학생이 이어서 할 만한 짧은 답변 후보."""
+
+    replies: list[str] = []
+
+
+_SUGGESTED_REPLIES_PROMPT = """너는 고등학생 진로·입시 상담 화면의 '추천 답변'을 만드는
+보조 AI다. 방금 컨설턴트(assistant)가 학생에게 한 말을 보고, **학생 입장에서** 이어서
+보낼 만한 짧은 답변 후보를 정확히 3개 만들어라.
+
+[규칙]
+1. 반드시 컨설턴트의 마지막 말에 자연스럽게 이어지는 답이어야 한다. 컨설턴트가
+   질문했으면 그 질문에 대한 서로 다른 방향의 답을, 선택지를 제시했으면 각 선택을
+   고르는 답을 만들어라. 맥락과 무관한 일반적인 문장을 지어내지 마라.
+2. 학생이 실제로 눌러서 그대로 보낼 1인칭 발화체다("~해주세요", "~가 궁금해요",
+   "~로 할게요" 등). 컨설턴트 말투(존댓말 설명체)로 쓰지 마라.
+3. 각 12~30자로 짧게. 세 개는 서로 뚜렷이 다른 선택/방향이어야 한다.
+4. 반드시 아래 JSON만 출력하라: {"replies": ["...", "...", "..."]}"""
+
+
+async def _generate_suggested_replies(assistant_text: str) -> list[str]:
+    """챗봇 마지막 답변에 맞춘 학생용 추천 답변 3개. 실패해도 상담 흐름을 막지
+    않도록 예외를 삼키고 빈 목록을 돌려준다(화면은 칩을 안 보여줄 뿐이다)."""
+    text = (assistant_text or "").strip()
+    if not text:
+        return []
+    try:
+        result = await call_structured(
+            _SUGGESTED_REPLIES_PROMPT,
+            json.dumps({"consultant_last_message": text}, ensure_ascii=False),
+            _SuggestedReplies,
+        )
+    except Exception:
+        logger.warning("suggested replies generation failed", exc_info=True)
+        return []
+    # 빈 문자열·중복 제거 후 최대 3개.
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for r in result.replies:
+        r = r.strip()
+        if r and r not in seen:
+            seen.add(r)
+            cleaned.append(r)
+    return cleaned[:3]
+
+
+async def stream_consultation_opening(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> AsyncIterator[str]:
+    """새로 열린 상담 세션의 첫 인사를 모델이 직접 짓게 한다. 학생이 빈 입력칸
+    앞에서 멈추지 않도록, 진단·학생 데이터를 본 챗봇이 먼저 말을 건다. 학생 메시지
+    없이 시스템 프롬프트만으로 여는 말을 만들며, 도구는 주지 않는다(첫 인사에서
+    계획을 저장하거나 학과를 조회할 이유가 없다). 이미 대화가 시작된 세션이면
+    중복 인사를 만들지 않고 조용히 끝낸다."""
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is None:
+            yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
+            return
+        try:
+            session = await consultation_service.get_session(db, user_id, session_id)
+        except ConsultationSessionNotFoundError as exc:
+            yield _sse(
+                "error",
+                {"error_code": "CONSULTATION_SESSION_NOT_FOUND", "message": exc.message},
+            )
+            return
+
+        conversation_id = session.conversation_id
+        # 이미 어시스턴트 인사나 학생 발화가 있으면 첫 인사를 또 만들지 않는다.
+        existing = await db.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.conversation_id == conversation_id)
+        )
+        if existing:
+            yield _sse("done", {"message_id": None, "applied_actions": []})
+            return
+
+        context = await build_context(db, user)
+        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+        system_prompt = build_consultation_system_prompt(
+            session.kind,
+            json.dumps(context, ensure_ascii=False),
+            json.dumps(roadmap_summary, ensure_ascii=False)
+            if roadmap_summary is not None
+            else None,
+        )
+        # 학생 발화 대신, 여는 말을 건네라는 지시를 준다. 이 지시문은 저장하지 않고
+        # (학생에게 보이지 않아야 한다), 생성된 인사만 어시스턴트 메시지로 남긴다.
+        llm_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "[시스템 안내: 지금 상담 화면이 막 열렸고 학생은 아직 아무 말도 하지 "
+                    "않았습니다. 진단 결과와 학생 데이터를 근거로, 학생에게 먼저 건네는 "
+                    "여는 말을 한 번 해주세요. 무엇을 근거로 보고 있는지 짧게 밝히고, "
+                    "학생이 어떤 이야기부터 꺼내면 좋을지 한 가지만 자연스럽게 물어보며 "
+                    "대화를 시작하세요. 도구는 호출하지 마세요.]"
+                ),
+            },
+        ]
+
+        answer_parts: list[str] = []
+        error_payload: dict[str, Any] | None = None
+        try:
+            async for chunk in stream_chat(llm_messages, []):
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    answer_parts.append(delta.content)
+                    yield _sse("token", {"delta": delta.content})
+        except LLMUnavailableError as exc:
+            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
+        except Exception:
+            logger.exception("consultation opening stream failed: session_id=%s", session_id)
+            error_payload = {
+                "error_code": "LLM_UNAVAILABLE",
+                "message": "잠시 후 다시 시도해주세요",
+            }
+
+        if error_payload is not None:
+            yield _sse("error", error_payload)
+            return
+
+        assistant_message = await _persist_assistant_turn(
+            db, conversation_id, ChatMode.NORMAL, "".join(answer_parts), []
+        )
+        yield _sse(
+            "done",
+            {
+                "message_id": str(assistant_message.id) if assistant_message else None,
+                "applied_actions": [],
+                "suggested_replies": await _generate_suggested_replies(
+                    "".join(answer_parts)
+                ),
+            },
+        )
+
+
 async def stream_consultation_reply(
     user_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -665,6 +809,9 @@ async def stream_consultation_reply(
             {
                 "message_id": str(assistant_message.id) if assistant_message else None,
                 "applied_actions": applied_actions,
+                "suggested_replies": await _generate_suggested_replies(
+                    "".join(answer_parts)
+                ),
             },
         )
 
