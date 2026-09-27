@@ -144,7 +144,7 @@ async def test_edit_mode_reports_tool_failure_instead_of_crashing(
                 _chunk(
                     tool_calls=[
                         _tool_call_delta(
-                            0, "call_1", "update_plan", '{"plan_id": "not-a-uuid"}'
+                            0, "call_1", "update_plan", '{"plan_index": 999}'
                         )
                     ]
                 )
@@ -240,6 +240,10 @@ async def test_chat_context_carries_the_students_own_records(
     system_prompt = CALLS[0]["messages"][0]["content"]
     assert "AI 동아리 감염병 모델링" in system_prompt
     assert "<학생_데이터>" in system_prompt
+    # 모델이 기록 UUID를 베껴 도구에 넣는 구조를 차단한다. 모델에는 이번 호출 안에서만
+    # 쓰는 작은 정수 index만 보이고, 실제 UUID는 서버의 참조표에만 남는다.
+    assert '"index": 1' in system_prompt
+    assert '"id":' not in system_prompt
 
 
 async def test_text_before_and_after_a_tool_call_is_kept_separate(

@@ -31,6 +31,7 @@ class ConversationPurpose(StrEnum):
     GENERAL = "general"
     INITIAL_CONSULTATION = "initial_consultation"
     SEMESTER_REVIEW_CONSULTATION = "semester_review_consultation"
+    GRADUATE_FIT_CONSULTATION = "graduate_fit_consultation"
 
 
 class Conversation(Base):

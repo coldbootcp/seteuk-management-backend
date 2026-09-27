@@ -212,7 +212,9 @@ def _filter_future_grade_data(
         )
 
     return SeteukAnalysisResult(
-        # 걸러내기는 기록만 덜어 낸다 — 학적사항이 밝힌 기준점은 그대로 가져간다.
+        # 걸러내기는 기록만 덜어 낸다 — 인적사항의 성명과 학적사항이 밝힌 기준점은
+        # 그대로 가져간다.
+        student_name=result.student_name,
         freshman_academic_year=result.freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,

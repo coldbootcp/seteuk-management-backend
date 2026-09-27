@@ -20,6 +20,40 @@ from app.services.record_service import get_record
 # 학생이 올리는 안내문·보고서 기준. 생기부(50MB)보다 훨씬 작아도 충분하다.
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
+# 허용 형식은 발표자료·탐구보고서 기준으로 PDF·DOCX·PPTX만. 화면(accept 속성)이
+# 이미 이 셋으로 제한하지만, API를 직접 부르면 어떤 파일이든 저장되던 문제가
+# 있었다(방어 심층). 확장자·선언된 MIME·실제 매직바이트를 함께 본다 — 확장자나
+# content_type은 위조할 수 있으므로 바이트 시그니처가 최종 근거다.
+_UNSUPPORTED_FILE_MESSAGE = (
+    "PDF, DOCX, PPTX 파일만 올릴 수 있습니다. "
+    "발표자료·탐구보고서를 이 형식으로 저장해 첨부해주세요."
+)
+_ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx"}
+_ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    # 일부 클라이언트는 office 파일을 일반 zip으로 신고한다 — 확장자·매직으로 다시 건다.
+    "application/zip",
+    "application/octet-stream",
+}
+
+
+def _looks_like_allowed_file(file_name: str, content: bytes) -> bool:
+    """확장자와 매직바이트가 모두 허용 형식과 맞는지 본다.
+
+    PDF는 '%PDF'로 시작하고, DOCX·PPTX는 OOXML(=ZIP) 컨테이너라 'PK\\x03\\x04'로
+    시작한다. 둘 다 앞 4바이트만 봐도 충분하다.
+    """
+    lowered = file_name.lower()
+    extension = lowered[lowered.rfind(".") :] if "." in lowered else ""
+    if extension not in _ALLOWED_EXTENSIONS:
+        return False
+    if extension == ".pdf":
+        return content.startswith(b"%PDF")
+    # .docx / .pptx
+    return content.startswith(b"PK\x03\x04")
+
 
 def _extract_text(content: bytes, content_type: str | None) -> str:
     """검색과 LLM 입력에 쓸 본문 텍스트. 추출에 실패해도 첨부 자체는 성공시킨다 —
@@ -46,6 +80,13 @@ async def create_attachment(
 ) -> ActivityAttachment:
     if len(content) > MAX_ATTACHMENT_BYTES:
         raise UnsupportedFileError("첨부파일은 10MB까지 올릴 수 있습니다")
+
+    # 형식 검증: 확장자·매직바이트가 허용 형식(PDF·DOCX·PPTX)과 맞아야 한다. 선언된
+    # content_type도 함께 보되, 위조 가능하므로 매직바이트 검사가 최종 근거다.
+    if not _looks_like_allowed_file(file_name, content) or (
+        content_type and content_type not in _ALLOWED_CONTENT_TYPES
+    ):
+        raise UnsupportedFileError(_UNSUPPORTED_FILE_MESSAGE)
 
     # 소유권은 활동을 통해 확인한다 — 남의 활동에 파일을 붙일 수 없다.
     await get_record(db, Activity, user_id, activity_id)

@@ -9,8 +9,6 @@ from app.db.session import get_db
 from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.profile import (
-    ClarifyRequest,
-    ClarifyResponse,
     ProfileRequest,
     ProfileResponse,
     SuggestRequest,
@@ -51,14 +49,3 @@ async def suggest_direction(
     학생이 고른 값만 POST /profile로 확정된다."""
     await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
     return await profile_service.suggest_direction(data.career_goal)
-
-
-@router.post("/clarify", response_model=ClarifyResponse)
-async def clarify_onboarding(
-    data: ClarifyRequest,
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> ClarifyResponse:
-    """지금까지 채운 답변을 보고, 아직 비었거나 막연한 부분에 대해 확인 질문을 만든다."""
-    await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
-    return await profile_service.clarify_onboarding(db, data)

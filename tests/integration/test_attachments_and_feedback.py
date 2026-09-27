@@ -108,6 +108,45 @@ async def test_attachment_round_trip(client: AsyncClient, auth_headers: dict[str
     ).json() == []
 
 
+async def test_attachment_rejects_disallowed_file_types(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """화면(accept)뿐 아니라 서버도 형식을 막는다 — API를 직접 불러도 PDF·DOCX·PPTX가
+    아니면 저장 전에 거부한다. 확장자·선언 MIME은 위조할 수 있어 매직바이트가 최종 근거다."""
+    activity_id = await _new_activity(client, auth_headers)
+
+    # HTML 파일: 확장자·매직바이트 모두 허용 형식이 아님.
+    html = await client.post(
+        f"/api/v1/activities/{activity_id}/attachments",
+        headers=auth_headers,
+        files={"file": ("evil.html", b"<script>alert(1)</script>", "text/html")},
+    )
+    assert html.status_code == 422
+    assert html.json()["error_code"] == "UNSUPPORTED_FILE"
+
+    # 확장자만 .pdf로 위장하고 내용은 HTML — 매직바이트 검사로 걸러진다.
+    fake = await client.post(
+        f"/api/v1/activities/{activity_id}/attachments",
+        headers=auth_headers,
+        files={"file": ("fake.pdf", b"<html></html>", "application/pdf")},
+    )
+    assert fake.status_code == 422
+
+    # DOCX(OOXML=ZIP, PK 시그니처)는 허용된다.
+    docx = await client.post(
+        f"/api/v1/activities/{activity_id}/attachments",
+        headers=auth_headers,
+        files={
+            "file": (
+                "보고서.docx",
+                b"PK\x03\x04docx body",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert docx.status_code == 201
+
+
 async def test_attachment_cannot_be_bolted_onto_someone_elses_activity(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
