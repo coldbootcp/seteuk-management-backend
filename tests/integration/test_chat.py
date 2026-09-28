@@ -25,12 +25,21 @@ def _tool_call_delta(index: int, call_id: str, name: str, arguments: str) -> Sim
 
 
 CALLS: list[dict[str, Any]] = []
+# 제목 생성용 구조화 호출이 돌려줄 제목을 테스트마다 정한다(실제 LLM을 부르지 않는다).
+TITLE_REPLIES: list[str] = []
 
 
 @pytest.fixture(autouse=True)
 def _patch_session_factory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chat_service, "AsyncSessionLocal", TestSessionLocal)
     CALLS.clear()
+    TITLE_REPLIES.clear()
+
+    async def fake_call_structured(system_prompt, user_content, response_model):
+        title = TITLE_REPLIES.pop(0) if TITLE_REPLIES else ""
+        return response_model.model_validate({"title": title})
+
+    monkeypatch.setattr(chat_service, "call_structured", fake_call_structured)
 
 
 def _install_stream(monkeypatch: pytest.MonkeyPatch, rounds: list[list[SimpleNamespace]]) -> None:
@@ -65,6 +74,7 @@ async def test_normal_mode_streams_tokens_and_persists_history(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_stream(monkeypatch, [[_chunk("지금까지의 "), _chunk("활동을 보면요")]])
+    TITLE_REPLIES.append("활동 흐름 점검")
     conversation_id = await _new_conversation(client, auth_headers)
 
     response = await client.post(
@@ -74,8 +84,9 @@ async def test_normal_mode_streams_tokens_and_persists_history(
     )
     assert response.status_code == 200
     events = _parse_sse(response.text)
-    assert [e for e, _ in events] == ["token", "token", "done"]
-    assert events[-1][1]["applied_actions"] == []
+    assert [e for e, _ in events] == ["token", "token", "done", "title"]
+    assert events[2][1]["applied_actions"] == []
+    assert events[3][1]["title"] == "활동 흐름 점검"
 
     # 일반 모드에서는 도구를 아예 넘기지 않아 기록이 바뀔 수 없다.
     assert CALLS[0]["tools"] is None
@@ -87,8 +98,63 @@ async def test_normal_mode_streams_tokens_and_persists_history(
     assert [m["role"] for m in saved] == ["user", "assistant"]
     assert saved[1]["content"] == "지금까지의 활동을 보면요"
 
+    # 제목은 첫 메시지 원문이 아니라 대화 주제로 지은 것이다.
     conversations = await client.get("/api/v1/conversations", headers=auth_headers)
-    assert conversations.json()["items"][0]["title"] == "제 활동 흐름 어때요?"
+    item = conversations.json()["items"][0]
+    assert item["title"] == "활동 흐름 점검"
+    assert item["title_source"] == "auto"
+
+
+async def test_title_waits_for_a_topic_then_falls_back_to_first_message(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """인사말뿐이라 주제를 못 읽으면 다음 턴에 다시 시도하고, 정해진 턴을 넘기면
+    첫 메시지로 대신한다."""
+    conversation_id = await _new_conversation(client, auth_headers)
+    for turn in range(chat_service.TITLE_ATTEMPT_TURNS):
+        _install_stream(monkeypatch, [[_chunk("네, 말씀하세요.")]])
+        TITLE_REPLIES.append("")
+        await client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            json={"content": f"안녕 {turn}", "mode": "normal"},
+            headers=auth_headers,
+        )
+        items = (await client.get("/api/v1/conversations", headers=auth_headers)).json()
+        title = items["items"][0]["title"]
+        if turn < chat_service.TITLE_ATTEMPT_TURNS - 1:
+            assert title is None
+    assert title == "안녕 0"
+
+
+async def test_rename_conversation_is_kept_over_auto_titles(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation_id = await _new_conversation(client, auth_headers)
+
+    renamed = await client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "  물리 탐구 고민  "},
+        headers=auth_headers,
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "물리 탐구 고민"
+    assert renamed.json()["title_source"] == "user"
+
+    _install_stream(monkeypatch, [[_chunk("좋아요.")]])
+    TITLE_REPLIES.append("다른 제목")
+    response = await client.post(
+        f"/api/v1/conversations/{conversation_id}/messages",
+        json={"content": "물리 탐구 주제 추천해줘", "mode": "normal"},
+        headers=auth_headers,
+    )
+    assert "title" not in [e for e, _ in _parse_sse(response.text)]
+    items = (await client.get("/api/v1/conversations", headers=auth_headers)).json()
+    assert items["items"][0]["title"] == "물리 탐구 고민"
+
+    blank = await client.patch(
+        f"/api/v1/conversations/{conversation_id}", json={"title": "   "}, headers=auth_headers
+    )
+    assert blank.status_code == 422
 
 
 async def test_edit_mode_executes_tool_and_records_actions(

@@ -57,7 +57,7 @@
 | `refresh_tokens` | id(=jti), user_id, expires_at, revoked_at | 로그아웃으로 개별 토큰 무효화 |
 | `seteuk_uploads` | id, user_id, status, parsing_confidence, raw_result, failure_reason | PDF 원본은 저장하지 않음 |
 | `attendance` | id, user_id, source_upload_id, grade, total_days, absence, note | |
-| `academic_performance` | …, grade, semester, category, subject, units, achievement_grade, student_count, raw_score, subject_average, std_deviation, rank | |
+| `academic_performance` | …, grade, semester, category, subject, subject_code(카탈로그 코드, nullable), units, achievement_grade, student_count, raw_score, subject_average, std_deviation, rank | |
 | `reading_activities` | …, grade, semester, subject, title, author | |
 | `awards` | …, name, rank, date, raw_date | date는 ISO 8601, 원문은 raw_date |
 | `volunteer_records` | …, grade, date, raw_date, place, content, hours | |
@@ -66,7 +66,8 @@
 | `student_interests` | id, user_id, field_key, value(JSONB), answered_at, updated_at | 챗봇의 장기 메모리 |
 | `diagnoses` | id, user_id, status, failure_reason, grades_trend, semester_reviews, career_thread, activity_inventory, knowledge_graph_links, strengths, weaknesses, opportunities, threats, headline_comment | 서로 독립적으로 계산되는 섹션들 — §3.4 참고 |
 | `recommendations` | id, user_id, source_activity_id, desired_activity_type, options(JSONB) | 기능2 |
-| `conversations` | id, user_id, title, created_at, updated_at | |
+| `conversations` | id, user_id, title, title_source, purpose, created_at, updated_at | title_source: default(상담 고정 제목) / auto(대화 주제로 지은 제목) / user(학생이 고침) |
+| `consultation_sessions` | id, user_id, conversation_id, kind, target_grade, target_semester, status, draft_flow(JSONB), flow_confirmed_at, semester_goal(JSONB), draft_plan(JSONB), full_replan_confirmed_at, ready_at, concluded_at | 진단+상담 관문 — §3.8a |
 | `messages` | id, conversation_id, role, content, mode, applied_actions(JSONB) | |
 | `usage_events` | id, user_id, action, created_at | 사용량 한도 카운터 |
 | `universities` | id, official_code, name, campus_name, region, source_url, verified_at | 입학연도와 분리된 공식 대학 기준정보 |
@@ -233,9 +234,26 @@ Base URL: `/api/v1`
 grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러진 게 있으면
 `errors`에 `block_id: "future_grade_filter"`로 몇 건이 왜 빠졌는지 남는다.
 
-**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence, imported_at }`
+**교체 업로드 (`mode=replace`, form 필드)** — 설정 탭의 올리기·"최신으로 교체". 온보딩
+(`mode=onboarding`, 기본값)과 같은 파싱을 거치지만 검토 화면이 없다. 파싱이 끝나면 서버가
+학생 기록과 대조해(`services/record_review.py`) 결과를 업로드의 `review`에 남긴다.
+
+- **이상**(`anomalies[].kind`): `name_mismatch`(생기부 성명 ≠ 계정 이름),
+  `freshman_year_mismatch`, `future_period`(현재 학기 또는 입학 연도 기준보다 뒤 시점 기록 —
+  온보딩처럼 반려하지 않고 이상으로 남긴다), `stale_record`(바로 앞 학기보다 더 옛날에서
+  끝나는 문서), `activity_match_unavailable`(활동 대조 LLM 실패).
+- **충돌**(`conflicts[]`): 직접 입력한 기록(`source_upload_id`가 빈 행)과 같은 것을 가리키는데
+  내용이 다른 항목. 성적은 같은 학기·과목의 성취도·원점수·석차를 코드로 비교하고, 활동은
+  LLM이 번호로 짝을 지은 뒤 코드가 검증한다.
+- **중복**은 반영하지 않고 `skipped_duplicates`에 센다. 학생이 성적 없이 등록한 수강 과목
+  행은 생기부 성적으로 채운다(과목 코드 유지).
+- 이상도 충돌도 없으면 바로 반영하고 `review.state = "clean_imported"`, 있으면 반영하지 않고
+  `"needs_review"`. 진단은 다시 만들지 않는다(학생이 `POST /diagnosis`로 요청).
+
+**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence, imported_at, failure_reason, mode, review }`
 `status`: `processing | done | failed`. `done`은 "읽어냈다"는 뜻이고, 실제로
-기록에 들어간 시점은 `imported_at`이 말한다(검토 전이면 null).
+기록에 들어간 시점은 `imported_at`이 말한다(검토 전이면 null). `GET /seteuk/uploads/latest`도
+`mode`·`review`를 함께 돌려준다.
 
 **GET /seteuk/uploads/{upload_id}/result** → 200
 ```json
@@ -308,6 +326,38 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 웹 온보딩은 이 엔드포인트를 별도 화면으로 노출하지 않고, 기본 프로필 저장 뒤 곧바로
 진단·상담 관문으로 이어진다. 진로 분야와 희망 학과 또는 관심 키워드가 이미 있으면 이
 엔드포인트도 LLM을 호출하지 않고 빈 질문 목록을 반환한다.
+
+**GET /profile/current-courses** → 이번 학기(`current_grade`/`current_semester`) 수강 과목
+```json
+{ "grade": 2, "semester": 1, "curriculum": "2022",
+  "courses": [{ "id": "uuid", "subject": "대수", "subject_code": "2022:대수",
+                "category": "수학", "units": 4, "is_custom": false, "locked": false }] }
+```
+**PUT /profile/current-courses** `{ "courses": [{ "subject_code": "2022:대수" }, { "custom_name": "우리 지역 탐구" }] }`
+→ 같은 응답. 온보딩(프로필 저장 → **수강 과목** → 상담)과 상담 화면에서 쓴다. 과목은
+카탈로그 코드(`subject_code`)로만 고르고, 목록에 없는 학교 자체 과목만 `custom_name`("기타")으로
+받는다 — 둘 중 정확히 하나, 최대 30개, 모르는 코드는 422. 별도 테이블 없이
+`academic_performance`에 성적 칸이 빈 행으로 저장돼 로드맵 마디의 수강 과목·상담 컨텍스트가 그대로
+읽는다. **덮어쓰기**지만 생기부에서 온 행이나 성적이 들어간 행은 지우지 않는다(`locked: true`).
+필수는 아니다(개학 전이면 모를 수 있다) — 화면이 건너뛰기 전에 한 번 더 확인한다.
+
+### 3.3-subjects 과목 카탈로그 `/subjects`
+
+고등학교 과목 전체(2015·2022 개정 보통 교과 + 특목고 전문 교과)를 코드에 둔 카탈로그
+(`app/services/subject_catalog.py`). 과목 기록은 자유 입력 대신 이 코드로 과목 데이터와 1:1로
+잇는다(`academic_performance.subject_code`, 시간표 칸의 `subject_code`). 직업계고 전문 교과(NCS)는
+범위 밖이라 "기타"로 받는다. 2022 과목은 전부 공식 자료와 대조했고, 대조하지 못한 2015 예술 계열·
+전문 교과Ⅰ은 `verified: false`. 2022에는 외국어·국제 계열 선택 과목이 없다(총론 <표 6>).
+
+`curriculum`을 생략하면 학생의 입학 학년도로 정한다(2025 입학생부터 `2022`).
+
+**GET /subjects** → `{ curriculum, items: [Subject] }` — 그 교육과정의 전체 목록
+**GET /subjects/search?q=수&curriculum=&limit=12** → 같은 모양. 정확한 별칭 → 이름·별칭 포함 순,
+그 안에서 공통 < 일반선택 < 진로선택 < 융합선택 < 전문교과 순. 줄임말 별칭을 인식한다
+("수1" → 2022 `대수` / 2015 `수학Ⅰ`, "확통" → `확률과 통계`).
+**GET /subjects/common?grade=2&semester=1** → 그 학기에 흔히 편성되는 과목 예시(보고 있는 학기 기준)
+
+`Subject = { code: "2022:대수", name, curriculum, group, category, default_units, track, verified }`
 
 ### 3.3a 입학 연도별 교육·대입 기준
 
@@ -761,8 +811,10 @@ LLM 컨텍스트에는 추출 텍스트만 실리고 파일 본문은 싣지 않
 
 ### 3.8 AI 챗봇
 
-**POST /conversations** → 201 `{ id, title, purpose, created_at, updated_at }`
+**POST /conversations** → 201 `{ id, title, title_source, purpose, created_at, updated_at }`
 **GET /conversations** → `{ items, total }` (최근 대화 순)
+**PATCH /conversations/{id}** `{ "title": "물리 탐구 고민" }` → 200 대화 (1~60자, 앞뒤 공백 제거,
+`title_source: "user"` — 이후 자동 제목이 덮어쓰지 않는다)
 **DELETE /conversations/{id}** → 204
 **GET /conversations/{id}/messages** → 200 메시지 배열
 
@@ -779,6 +831,9 @@ data: {"delta": "독서 기록에"}
 
 event: done
 data: {"message_id": "uuid", "applied_actions": [...]}
+
+event: title
+data: {"conversation_id": "uuid", "title": "이기적 유전자 독서 기록"}
 
 event: error
 data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해주세요"}
@@ -800,14 +855,95 @@ data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해�
 > **삭제 도구는 의도적으로 없다.** 대화 중의 오해로 3년치 기록이 사라지는 사고를 막기
 > 위해, 삭제는 탭의 DELETE 엔드포인트(명시적 조작)로만 가능하다.
 
+**대화 제목** — 첫 메시지 원문을 자르지 않는다. 답변(`done`)을 보낸 뒤 학생 발화와 답변을
+보고 주제를 요약한 제목을 지어 `title` 이벤트로 알린다. 인사말뿐이라 주제가 없으면 다음
+턴에 다시 시도하고, 3턴이 지나도 못 지으면 첫 메시지로 대신한다. 학생이 고친 제목
+(`title_source: "user"`)은 건드리지 않는다.
+
 챗봇의 개인화 재료는 매 요청마다 조립된다: 기본 정보 + `student_interests`(메모리) +
 최신 진단 + 활동/성적/독서/수상/봉사/출결 + 진행 중인 계획 + 직전 20개 메시지. 각
 영역에는 상한이 있고, 잘린 경우 `counts`에 전체 개수가 함께 들어가 챗봇이 "기록이 더
 있다"는 사실을 알 수 있다.
 
+### 3.8a 진단+상담 관문 `/consultation`
+
+상담은 **큰 그림에서 작은 그림으로** 좁혀 가며, 단계는 세션에 저장된 사실로 서버가
+계산한다(`stage`). 앞 단계가 끝나지 않으면 다음 단계 도구는 오류를 돌려준다.
+
+| stage | 뜻 | 다음 단계로 가는 조건 |
+|---|---|---|
+| `flow` | 3개년 흐름 조율 — 현재 학기~3학년 2학기의 큰 방향 | 챗봇이 `propose_three_year_flow`로 흐름 초안을 저장하고, **학생이 `confirm-flow`로 확정** |
+| `semester_goal` | 확정된 흐름 안에서 이번 학기 목표 합의 | 챗봇이 `set_semester_goal` |
+| `topics` | 목표에서 나온 구체 탐구 주제 | 챗봇이 `propose_draft_plan`(주제 10개) |
+| `wrap_up` | 초안 확인과 마무리 | 챗봇이 `signal_ready_to_conclude` → 학생이 `conclude` |
+| `graduate_fit` | 졸업생 목표 학과 적합성 상담(로드맵 없음) | — |
+
+학기말 재평가(`semester_review`)는 기존 흐름을 유지하므로 `semester_goal`에서 시작한다.
+`confirm-full-replan`으로 전체 재설계에 동의하면 `flow`부터 다시 세운다. 흐름이 바뀌면
+확정과 그 위에 쌓은 학기 목표·주제 초안이 함께 풀린다.
+
+**단계별 도구** — 매 턴 모델이 볼 수 있는 도구 목록 자체를 단계로 고정한다(프롬프트로 부탁하는 것에
+더해 코드가 보증): `flow` → `propose_three_year_flow`만, `semester_goal` → `set_semester_goal`,
+`topics` → `propose_draft_plan`·`set_semester_goal`, `wrap_up` → `signal_ready_to_conclude`와 앞 단계
+수정 도구. 흐름 확정 뒤에도 흐름 수정은 허용하고(`propose_three_year_flow` 추가), 재평가는 전체 재설계
+제안(`propose_full_replan_exception`)을 쓸 수 있다. `propose_three_year_flow`는 **3학년 말 도착점**
+(`destination`)을 필수로 받는다 — 도착점을 먼저 합의하고 거기서 거꾸로 남은 학기를 나눈다.
+
+**출력 필터** — "초안이에요, 버튼을 눌러야 확정돼요" 안내는 `signal_ready_to_conclude`를 부른 턴에만
+남기고 다른 턴에서는 문장째 지운다. 화면에 없는 "나가기 버튼"은 실제 이름
+"'상담 마치고 메인 화면으로' 버튼"으로 바꾼다. 수강 과목이 등록돼 있으면 등록되지 않은 과목을
+"듣는 과목"처럼 말하는 문장을 중화한다. 컨텍스트의 `current_semester_courses`는
+`/profile/current-courses`와 이번 학기 기본 시간표를 합친 목록이다.
+
+**GET /consultation/status** → `{ satisfied, required_kind, target_grade, target_semester, resumable_session_id }`
+**POST /consultation/sessions** → 세션 생성 또는 재개
+**GET /consultation/sessions/{id}** → 세션
+```json
+{ "id": "uuid", "conversation_id": "uuid", "kind": "initial", "target_grade": 2,
+  "target_semester": 2, "status": "in_progress", "ready": false,
+  "full_replan_confirmed": false, "stage": "semester_goal",
+  "flow": { "career_track": "…", "destination": "3학년 말 도착점", "focus": "…", "so_far": "…",
+            "nodes": [{ "grade": 2, "semester": 2, "narrative_stage": "분화",
+                        "title": "…", "objective": "…",
+                        "candidate_subjects": [], "competency_goals": [] }] },
+  "flow_confirmed": true, "semester_goal": { "title": "…", "objective": "…" } }
+```
+**GET /consultation/sessions/{id}/messages** → 메시지 배열
+**POST /consultation/sessions/{id}/opening** → SSE, 챗봇의 첫 인사
+**POST /consultation/sessions/{id}/messages** `{ "content": "…" }` → SSE. 일반 챗봇 이벤트에
+더해 매 턴 끝에 `signal` 이벤트 `{ ready, full_replan_confirmed, stage, flow, flow_confirmed, semester_goal }`
+**POST /consultation/sessions/{id}/confirm-flow** `{ "confirmed": true }` → 세션. 흐름 초안이 없으면
+409 `CONSULTATION_NOT_READY`. `false`는 "다시 조율" — 초안은 남기고 학기 목표·주제만 되돌린다.
+**POST /consultation/sessions/{id}/confirm-full-replan** `{ "confirmed": true }` → 세션
+**POST /consultation/sessions/{id}/conclude** → 세션. `wrap_up` 단계에서 챗봇이 준비 신호를 보낸
+뒤에만 성공, 그때 3개년 흐름·이번 학기 목표·주제가 `roadmap_nodes`/`roadmap_plan_events`로
+확정된다.
+
+상담 대화의 제목은 목적에 맞게 고정된다: 최초 상담 "3개년 흐름 설계", 재평가
+"N학년 N학기 점검", 졸업생 "목표 학과 지원 전략".
+
 ---
 
+**생기부 확인 상담 (`kind=record_review`)** — 설정 탭 교체 업로드가 `needs_review`로 멈췄을 때
+(3.2 참고) 학생에게 해명을 듣고 반영 방법을 정한다. **관문과 무관하다** — 마쳐도 학기 상담 완료로
+치지 않는다(`has_concluded_for_period`·`has_ever_concluded`가 이 종류를 뺀다). 다른 기능을 막지 않는다.
+
+- **POST /consultation/record-review** → `ConsultationSessionRead`(`kind: "record_review"`,
+  `stage: "record_review"`, `record_review: { anomalies, conflicts[+choice], scope, outstanding,
+  ready, concluded, result_state, imported }`). 확인을 기다리는 업로드가 없으면 409. 같은 업로드면
+  진행 중인 세션을 이어 간다.
+- 대화·첫 인사는 기존 `POST /sessions/{id}/messages`·`/opening`을 쓴다. 이 종류는 전용 프롬프트와
+  도구(`set_record_scope`: all/until/none, `resolve_record_conflict`: keep_mine/use_record/keep_both,
+  `signal_ready_to_conclude`)만 쓰고, 학기 계획용 출력 필터를 거치지 않는다. 로드맵을 바꿀 도구는
+  없다(재설계는 추천만). 턴 끝 `signal`에 `record_review` 현황이 실린다.
+- 정할 것(`outstanding`: 이상이 있으면 반영 범위, 반영한다면 충돌마다 선택)이 남아 있으면
+  `signal_ready_to_conclude`와 `conclude`가 거부된다(409).
+- **POST /sessions/{id}/conclude**(이 종류): 정한 대로 반영한다. `none`이면 반영하지 않고 업로드를
+  `discarded`로, 아니면 중복을 뺀 계획에 `use_record`·`keep_both` 항목을 더하고 `until` 범위 밖을 뺀 뒤
+  반영하며, `use_record`를 고른 학생 기록은 지운다(업로드 `resolved`).
+
 ## 4. 공통 규칙
+
 
 ### 4.1 에러
 

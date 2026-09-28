@@ -17,7 +17,8 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from pydantic import BaseModel
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -27,22 +28,22 @@ from app.core.exceptions import (
 )
 from app.db.session import AsyncSessionLocal
 from app.models.consultation import ConsultationKind, ConsultationStatus
-from app.models.conversation import ChatMode, Conversation, Message, MessageRole
+from app.models.conversation import ChatMode, Conversation, Message, MessageRole, TitleSource
 from app.models.user import User
-from app.services import consultation_service
+from app.services import consultation_service, record_review_consultation
 from app.services.chat.consultation_prompts import build_consultation_system_prompt
 from app.services.chat.consultation_tools import (
     GRADUATE_FIT_TOOL_SPECS,
     execute_consultation_tool,
     execute_graduate_fit_tool,
-)
-from app.services.chat.consultation_tools import (
-    TOOL_SPECS as CONSULTATION_TOOL_SPECS,
+    tools_for_stage,
 )
 from app.services.chat.context import build_context, prepare_context_for_chat
 from app.services.chat.prompts import build_system_prompt
 from app.services.chat.tools import TOOL_SPECS, execute_tool
-from app.services.llm import stream_chat
+from app.services.consultation_stage import remaining_periods, session_stage
+from app.services.llm import call_structured, stream_chat
+from app.services.subject_catalog import normalize as normalize_subject
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,17 @@ HISTORY_LIMIT = 20
 # 도구 호출 → 결과 → 다시 호출을 몇 번까지 허용할지. 무한 루프 방지용.
 MAX_TOOL_ROUNDS = 4
 TITLE_LIMIT = 60
+# 제목을 대화 내용으로 짓는 시도는 학생 발화 몇 번째까지 할지. 첫 마디가 "안녕"처럼
+# 주제가 없으면 다음 턴에 다시 시도하고, 이 횟수를 넘기면 첫 메시지로 대신한다.
+TITLE_ATTEMPT_TURNS = 3
 
 _GRADE_PERIOD = re.compile(r"([1-3])\s*학년(?:\s*([1-2])\s*학기)?")
 # 요약에서 모델이 "1-1: …", "2-1(이번 학기)"처럼 줄여 쓰는 학기 표기. "1-2개"
 # 같은 수량 표현과 헷갈리지 않도록 뒤에 콜론·괄호·쉼표·"학기"가 올 때만 인정한다.
 _SHORT_PERIOD = re.compile(r"(?<![\d-])([1-3])-([1-2])(?=\s*(?:[:(（,)\]]|학기))")
-_EXIT_NOTICE = "나가기 버튼"
+# 마무리 버튼 안내. 필터가 "나가기 버튼"을 실제 버튼 이름(CONCLUDE_BUTTON_LABEL)으로 바꾼
+# 뒤에도 같은 안내로 알아보도록 두 표현을 모두 잡는다.
+_EXIT_NOTICE = re.compile(r"나가기\s*버튼|상담\s*마치고\s*메인\s*화면으로")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _BUTTON_FOLLOW_UP = re.compile(r"누르|눌러|버튼")
 _LINE_PREFIX = re.compile(r"^[\s\-*•#>]*(?:\d+[.)]\s*)?")
@@ -120,6 +126,42 @@ _UNVERIFIED_PLAN_CLAIM = re.compile(
 )
 
 
+# 마무리 버튼의 실제 이름. 모델이 옛 표현("나가기 버튼")을 쓰면 이 이름으로 바꾼다.
+CONCLUDE_BUTTON_LABEL = "'상담 마치고 메인 화면으로' 버튼"
+_EXIT_BUTTON_ALIAS = re.compile(r"['‘\"“]?나가기['’\"”]?\s*버튼")
+# "아직 초안이에요, 버튼을 눌러야 확정돼요" 류의 안내. 매 턴 반복되면 학생이 지치므로
+# 마무리 신호(signal_ready_to_conclude)를 보내는 턴에만 남긴다.
+_CONCLUDE_NOTICE = re.compile(
+    r"(?:나가기|메인\s*화면|상담\s*마치|마무리\s*버튼).{0,60}(?:눌러|누르|확정)"
+    r"|다시\s*한\s*번\s*강조|아직\s*초안(?:이|일)|초안일\s*뿐",
+)
+def _strip_conclude_notice(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        sentences = _SENTENCE_SPLIT.split(line)
+        kept = [sentence for sentence in sentences if not _CONCLUDE_NOTICE.search(sentence)]
+        if kept or not line.strip():
+            lines.append(" ".join(kept))
+    return "\n".join(lines)
+
+
+def _replace_unregistered_courses(text: str, course_names: list[str]) -> str:
+    registered = {normalize_subject(name) for name in course_names}
+
+    def keep_or_replace(match: re.Match[str]) -> str:
+        # "공통수학1"처럼 정규식이 과목명 뒷부분만 잡을 수 있어, 바로 앞에 붙은 한글까지
+        # 넓혀 온전한 과목명으로 비교한다.
+        start = match.start()
+        while start > 0 and "가" <= text[start - 1] <= "힣":
+            start -= 1
+        word = normalize_subject(text[start : match.end()])
+        if word in registered or normalize_subject(match.group(0)) in registered:
+            return match.group(0)
+        return _UNVERIFIED_COURSE_PLACEHOLDER if start == match.start() else match.group(0)
+
+    return _UNVERIFIED_SPECIFIC_COURSE.sub(keep_or_replace, text)
+
+
 def _drop_dangling_fragment(text: str) -> str:
     """도구 호출 직전 라운드의 끝에 남은, 문장으로 끝맺지 못한 짧은 조각을 지운다.
 
@@ -170,7 +212,7 @@ def _heading_period(line: str) -> int | None:
 
 
 def _drop_repeated_exit_notice(text: str, *, already_given: bool) -> str:
-    """한 턴 안에서 "나가기 버튼" 안내는 처음 한 문장만 남긴다.
+    """한 턴 안에서 마무리 버튼 안내는 처음 한 문장만 남긴다.
 
     도구 호출 전후 라운드에 걸쳐, 또 한 문단 안에서도 모델이 같은 안내를 두세 번
     되풀이한 실제 응답이 있었다. already_given이면 이 텍스트의 안내 문장을 모두
@@ -182,7 +224,7 @@ def _drop_repeated_exit_notice(text: str, *, already_given: bool) -> str:
         kept_sentences: list[str] = []
         dropped_notice = False
         for sentence in _SENTENCE_SPLIT.split(line):
-            if _EXIT_NOTICE in sentence:
+            if _EXIT_NOTICE.search(sentence):
                 if given:
                     dropped_notice = True
                     continue
@@ -206,6 +248,8 @@ def filter_consultation_output_for_period(
     has_declared_direction: bool = False,
     has_current_course_data: bool = True,
     confirmed_plan_titles: list[str] | None = None,
+    allow_conclude_notice: bool = True,
+    current_course_names: list[str] | None = None,
 ) -> str:
     """현재보다 앞선 학기를 새 계획처럼 보이는 상담 문장에서 제거한다.
 
@@ -253,16 +297,17 @@ def filter_consultation_output_for_period(
 
     # 수강 과목이 아직 등록되지 않았는데 특정 교과를 실제 수강 중인 것처럼
     # 연결한 실제 응답을 막는다. 주제 설명은 보존하고, 확인되지 않은 과목명만
-    # 중립적인 표현으로 바꾼다.
+    # 중립적인 표현으로 바꾼다. 과목을 등록했으면 등록한 과목명은 그대로 둔다.
     # 다음 학기 이후를 말하는 줄은 건드리지 않는다 — 앞으로 들을 과목을 연계
     # 교과로 제안하는 것은 수강 사실을 단정하는 말이 아니다.
-    if not has_current_course_data:
+    if not has_current_course_data or current_course_names:
+        registered = current_course_names or []
         filtered = "\n".join(
             line
             if any(period > current for period in _line_periods(line))
             else _REPEATED_COURSE_PLACEHOLDER.sub(
                 _UNVERIFIED_COURSE_PLACEHOLDER,
-                _UNVERIFIED_SPECIFIC_COURSE.sub(_UNVERIFIED_COURSE_PLACEHOLDER, line),
+                _replace_unregistered_courses(line, registered),
             )
             for line in filtered.splitlines()
         )
@@ -270,6 +315,12 @@ def filter_consultation_output_for_period(
     # 초안 도구의 재시도는 모델 내부 처리일 뿐 학생이 볼 오류가 아니다. 또한
     # 상담 완료 전에는 계획이 확정·저장된 것이 아니므로 표현을 바로잡는다.
     filtered = _INTERNAL_DRAFT_RETRY.sub("", filtered)
+    # 마무리 버튼은 이름이 정해져 있다 — "나가기 버튼"은 실제 화면에 없는 이름이다.
+    filtered = _EXIT_BUTTON_ALIAS.sub(CONCLUDE_BUTTON_LABEL, filtered)
+    # "초안이에요, 버튼을 눌러야 확정돼요"는 마무리 신호를 보내는 턴에만 한 번 말한다.
+    # 프롬프트로 부탁했지만 거의 매 턴 반복하는 실제 응답이 있어 코드로 막는다.
+    if not allow_conclude_notice:
+        filtered = _strip_conclude_notice(filtered)
     filtered = _DRAFT_SAVED_CLAIM.sub("이번 학기 계획 초안을 정리했습니다", filtered)
     filtered = _PREMATURE_DRAFT_CONFIRMATION.sub("", filtered)
 
@@ -352,6 +403,95 @@ async def list_messages(
     return list(rows)
 
 
+async def rename_conversation(
+    db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID, title: str
+) -> Conversation:
+    """학생이 직접 고친 제목. 이후 자동 제목 생성은 이 대화를 건드리지 않는다."""
+    conversation = await get_conversation(db, user_id, conversation_id)
+    conversation.title = title
+    conversation.title_source = TitleSource.USER.value
+    await db.commit()
+    await db.refresh(conversation)
+    return conversation
+
+
+class _ConversationTitle(BaseModel):
+    title: str = ""
+
+
+_TITLE_PROMPT = """너는 고등학생 진로·학습 상담 앱의 대화 목록에 붙일 제목을 짓는다.
+학생이 한 말들과 상담 AI의 답변 일부를 보고, 이 대화가 무엇에 관한 것인지 한눈에
+알 수 있는 짧은 제목을 지어라.
+
+[규칙]
+1. 한국어 명사구로 6~18자. 문장·질문·존댓말 어미로 쓰지 마라
+   (좋은 예: "수학Ⅱ 독서 기록 연결", "2학년 활동 약점 점검", "물리 탐구 주제 고르기").
+2. 학생의 첫 말을 그대로 옮기지 말고 주제를 요약하라.
+3. 인사말·잡담뿐이라 주제를 알 수 없으면 빈 문자열을 돌려줘라.
+4. 따옴표·이모지·마침표를 넣지 마라.
+5. 반드시 아래 JSON만 출력하라: {"title": "..."}"""
+
+
+def _clean_title(raw: str) -> str:
+    title = " ".join((raw or "").split()).strip(" \"'“”‘’.·-")
+    return title[:TITLE_LIMIT]
+
+
+async def _maybe_generate_title(
+    db: AsyncSession, conversation_id: uuid.UUID, last_answer: str
+) -> str | None:
+    """일반 대화의 제목을 대화 주제로 짓는다. 학생이 고친 제목이나 이미 지은 제목은
+    건드리지 않는다. 실패해도 답변 흐름을 막지 않도록 예외를 삼킨다."""
+    conversation = await db.get(Conversation, conversation_id)
+    if conversation is None or conversation.title is not None:
+        return None
+
+    user_texts = list(
+        await db.scalars(
+            select(Message.content)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.role == MessageRole.USER.value,
+            )
+            .order_by(Message.created_at.asc())
+            .limit(TITLE_ATTEMPT_TURNS + 1)
+        )
+    )
+    if not user_texts:
+        return None
+
+    title = ""
+    try:
+        result = await call_structured(
+            _TITLE_PROMPT,
+            json.dumps(
+                {
+                    "student_messages": user_texts[:TITLE_ATTEMPT_TURNS],
+                    "assistant_last_answer": (last_answer or "")[:600],
+                },
+                ensure_ascii=False,
+            ),
+            _ConversationTitle,
+        )
+        title = _clean_title(result.title)
+    except Exception:
+        logger.warning("conversation title generation failed", exc_info=True)
+
+    if not title:
+        if len(user_texts) < TITLE_ATTEMPT_TURNS:
+            # 아직 주제가 드러나지 않았다 — 다음 턴에 다시 시도한다.
+            return None
+        title = _clean_title(user_texts[0]) or "새 대화"
+
+    await db.execute(
+        update(Conversation)
+        .where(Conversation.id == conversation_id, Conversation.title.is_(None))
+        .values(title=title, title_source=TitleSource.AUTO.value)
+    )
+    await db.commit()
+    return title
+
+
 def _sse(event: str, payload: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -431,7 +571,7 @@ async def stream_reply(
             return
 
         try:
-            conversation = await get_conversation(db, user_id, conversation_id)
+            await get_conversation(db, user_id, conversation_id)
         except ConversationNotFoundError as exc:
             # 라우터에서 확인한 뒤 스트림이 시작되기까지 사이에 지워질 수 있다.
             yield _sse("error", {"error_code": "CONVERSATION_NOT_FOUND", "message": exc.message})
@@ -445,8 +585,8 @@ async def stream_reply(
             mode=mode.value,
         )
         db.add(user_message)
-        if conversation.title is None:
-            conversation.title = " ".join(content.split())[:TITLE_LIMIT]
+        # 제목은 첫 메시지 원문을 자르지 않고, 답변이 끝난 뒤 대화 주제를 읽어 짓는다
+        # (_maybe_generate_title).
         await _touch(db, conversation_id)
         await db.commit()
 
@@ -579,6 +719,232 @@ async def stream_reply(
             },
         )
 
+        # 답변을 먼저 끝까지 보낸 뒤에 제목을 짓는다 — 제목 생성이 느리거나 실패해도
+        # 학생이 받는 답변에는 영향이 없어야 한다.
+        title = await _maybe_generate_title(db, conversation_id, "".join(answer_parts))
+        if title:
+            yield _sse("title", {"conversation_id": str(conversation_id), "title": title})
+
+
+class _SuggestedReplies(BaseModel):
+    """챗봇의 마지막 말에 학생이 이어서 할 만한 짧은 답변 후보."""
+
+    replies: list[str] = []
+
+
+_SUGGESTED_REPLIES_PROMPT = """너는 고등학생 진로·입시 상담 화면의 '추천 답변'을 만드는
+보조 AI다. 방금 컨설턴트(assistant)가 학생에게 한 말을 보고, **학생 입장에서** 이어서
+보낼 만한 짧은 답변 후보를 정확히 3개 만들어라.
+
+[규칙]
+1. 반드시 컨설턴트의 마지막 말에 자연스럽게 이어지는 답이어야 한다. 컨설턴트가
+   질문했으면 그 질문에 대한 서로 다른 방향의 답을, 선택지를 제시했으면 각 선택을
+   고르는 답을 만들어라. 맥락과 무관한 일반적인 문장을 지어내지 마라.
+2. 학생이 실제로 눌러서 그대로 보낼 1인칭 발화체다("~해주세요", "~가 궁금해요",
+   "~로 할게요" 등). 컨설턴트 말투(존댓말 설명체)로 쓰지 마라.
+3. 각 12~30자로 짧게. 세 개는 서로 뚜렷이 다른 선택/방향이어야 한다.
+4. 반드시 아래 JSON만 출력하라: {"replies": ["...", "...", "..."]}"""
+
+
+async def _generate_suggested_replies(assistant_text: str) -> list[str]:
+    """챗봇 마지막 답변에 맞춘 학생용 추천 답변 3개. 실패해도 상담 흐름을 막지
+    않도록 예외를 삼키고 빈 목록을 돌려준다(화면은 칩을 안 보여줄 뿐이다)."""
+    text = (assistant_text or "").strip()
+    if not text:
+        return []
+    try:
+        result = await call_structured(
+            _SUGGESTED_REPLIES_PROMPT,
+            json.dumps({"consultant_last_message": text}, ensure_ascii=False),
+            _SuggestedReplies,
+        )
+    except Exception:
+        logger.warning("suggested replies generation failed", exc_info=True)
+        return []
+    # 빈 문자열·중복 제거 후 최대 3개.
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for r in result.replies:
+        r = r.strip()
+        if r and r not in seen:
+            seen.add(r)
+            cleaned.append(r)
+    return cleaned[:3]
+
+
+def consultation_progress(session: Any) -> dict[str, Any]:
+    """<상담_진행_상태>에 넘길 사실들. 모두 세션에 저장된 값에서 계산한다."""
+    return {
+        "stage": session_stage(session),
+        "target_label": f"{session.target_grade}학년 {session.target_semester}학기",
+        "remaining_semesters": [
+            f"{g}학년 {s}학기"
+            for g, s in remaining_periods(session.target_grade, session.target_semester)
+        ],
+        "flow": session.draft_flow,
+        "flow_confirmed": session.flow_confirmed_at is not None,
+        "semester_goal": session.semester_goal,
+        "has_draft_plan": session.draft_plan is not None,
+    }
+
+
+def consultation_signal(session: Any) -> dict[str, Any]:
+    """매 턴 끝에 화면에 알리는 상태 — 마무리 버튼, 흐름 카드, 진행 단계 표시용."""
+    return {
+        "ready": session.status == ConsultationStatus.READY.value,
+        "full_replan_confirmed": session.full_replan_confirmed_at is not None,
+        "stage": session_stage(session),
+        "flow": session.draft_flow,
+        "flow_confirmed": session.flow_confirmed_at is not None,
+        "semester_goal": session.semester_goal,
+    }
+
+
+async def consultation_signal_for(db: AsyncSession, session: Any) -> dict[str, Any]:
+    """signal 이벤트 내용. 생기부 확인 상담은 흐름 카드 대신 확인 현황을 싣는다."""
+    if session.kind == ConsultationKind.RECORD_REVIEW.value:
+        return {
+            "ready": session.status == ConsultationStatus.READY.value,
+            "stage": session_stage(session),
+            "record_review": await record_review_consultation.state(db, session),
+        }
+    return consultation_signal(session)
+
+
+def _known_plan_titles(session: Any, roadmap_summary: list[dict] | None) -> list[str]:
+    """출력 필터가 '이미 계획에 있다'는 문장을 허용할 근거 — 확정된 로드맵 제목과
+    이 상담에서 실제로 저장한 흐름·학기 목표 제목. 여기 없는 제목을 기존 계획처럼
+    말하는 문장은 필터가 걸러낸다."""
+    titles = [str(node.get("title", "")) for node in (roadmap_summary or [])]
+    for node in (session.draft_flow or {}).get("nodes", []):
+        titles.append(str(node.get("title", "")))
+    if session.semester_goal:
+        titles.append(str(session.semester_goal.get("title", "")))
+    return [t for t in titles if t]
+
+
+def _opening_instruction(session: Any) -> str:
+    base = (
+        "[시스템 안내: 지금 상담 화면이 막 열렸고 학생은 아직 아무 말도 하지 않았습니다. "
+        "진단 결과와 학생 데이터를 근거로, 학생에게 먼저 건네는 여는 말을 한 번 해주세요. "
+        "무엇을 근거로 보고 있는지 짧게 밝히세요. 도구는 호출하지 마세요. "
+        "안내문처럼 길게 나열하지 말고 3~5문장 안팎으로 대화하듯 쓰세요. 진단 결과가 비어 "
+        "있으면 '진단 리포트를 봤다', '방금 분석했다'고 말하지 말고 지금 실제로 가진 정보"
+        "(학생이 답한 진로·관심, 학생부 반영 상태)만으로 시작한다고 말하세요. "
+    )
+    stage = session_stage(session)
+    if stage == "flow":
+        return base + (
+            "이번 상담은 3학년 말의 도착점을 먼저 정하고, 거기로 가는 3개년 흐름을 잡은 뒤, 그 "
+            "안에서 이번 학기 목표와 주제를 정하는 순서로 진행된다고 한 문장으로 알려 주세요. "
+            "기록이 있으면 지금까지의 출발점을 한두 문장으로 짚고, 진로 정보를 바탕으로 도착점 "
+            "후보를 한 문장으로 제시한 뒤 그 도착점이 맞는지 한 가지만 물어보세요. 이번 학기의 "
+            "과목·활동·주제는 아직 꺼내지 마세요.]"
+        )
+    if stage == "semester_goal":
+        return base + (
+            "3개년 흐름을 한두 문장으로 되짚고, 그 흐름이 여전히 맞는지 확인하는 질문 "
+            "한 가지로 대화를 시작하세요.]"
+        )
+    return base + "학생이 어떤 이야기부터 꺼내면 좋을지 한 가지만 물어보세요.]"
+
+
+async def stream_consultation_opening(
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> AsyncIterator[str]:
+    """새로 열린 상담 세션의 첫 인사를 모델이 직접 짓게 한다. 학생이 빈 입력칸
+    앞에서 멈추지 않도록, 진단·학생 데이터를 본 챗봇이 먼저 말을 건다. 학생 메시지
+    없이 시스템 프롬프트만으로 여는 말을 만들며, 도구는 주지 않는다(첫 인사에서
+    계획을 저장하거나 학과를 조회할 이유가 없다). 이미 대화가 시작된 세션이면
+    중복 인사를 만들지 않고 조용히 끝낸다."""
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is None:
+            yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
+            return
+        try:
+            session = await consultation_service.get_session(db, user_id, session_id)
+        except ConsultationSessionNotFoundError as exc:
+            yield _sse(
+                "error",
+                {"error_code": "CONSULTATION_SESSION_NOT_FOUND", "message": exc.message},
+            )
+            return
+
+        conversation_id = session.conversation_id
+        # 이미 어시스턴트 인사나 학생 발화가 있으면 첫 인사를 또 만들지 않는다.
+        existing = await db.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.conversation_id == conversation_id)
+        )
+        if existing:
+            yield _sse("done", {"message_id": None, "applied_actions": []})
+            return
+
+        if session.kind == ConsultationKind.RECORD_REVIEW.value:
+            system_prompt = record_review_consultation.build_prompt(
+                record_review_consultation.student_facts(user),
+                await record_review_consultation.state(db, session),
+            )
+            instruction = record_review_consultation.opening_instruction()
+        else:
+            context = await build_context(db, user)
+            roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+            system_prompt = build_consultation_system_prompt(
+                session.kind,
+                json.dumps(context, ensure_ascii=False),
+                json.dumps(roadmap_summary, ensure_ascii=False)
+                if roadmap_summary is not None
+                else None,
+                consultation_progress(session),
+            )
+            instruction = _opening_instruction(session)
+        # 학생 발화 대신, 여는 말을 건네라는 지시를 준다. 이 지시문은 저장하지 않고
+        # (학생에게 보이지 않아야 한다), 생성된 인사만 어시스턴트 메시지로 남긴다.
+        llm_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": instruction},
+        ]
+
+        answer_parts: list[str] = []
+        error_payload: dict[str, Any] | None = None
+        try:
+            async for chunk in stream_chat(llm_messages, []):
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    answer_parts.append(delta.content)
+                    yield _sse("token", {"delta": delta.content})
+        except LLMUnavailableError as exc:
+            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
+        except Exception:
+            logger.exception("consultation opening stream failed: session_id=%s", session_id)
+            error_payload = {
+                "error_code": "LLM_UNAVAILABLE",
+                "message": "잠시 후 다시 시도해주세요",
+            }
+
+        if error_payload is not None:
+            yield _sse("error", error_payload)
+            return
+
+        assistant_message = await _persist_assistant_turn(
+            db, conversation_id, ChatMode.NORMAL, "".join(answer_parts), []
+        )
+        yield _sse(
+            "done",
+            {
+                "message_id": str(assistant_message.id) if assistant_message else None,
+                "applied_actions": [],
+                "suggested_replies": await _generate_suggested_replies(
+                    "".join(answer_parts)
+                ),
+            },
+        )
+
 
 async def stream_consultation_reply(
     user_id: uuid.UUID,
@@ -614,8 +980,13 @@ async def stream_consultation_reply(
             mode=ChatMode.NORMAL.value,
         )
         db.add(user_message)
+        # 상담 대화의 제목은 세션을 만들 때 목적에 맞게 정해 둔다(예: "3개년 흐름 설계").
+        # 예전 세션처럼 제목이 비어 있으면 같은 규칙으로 채운다.
         if conversation is not None and conversation.title is None:
-            conversation.title = " ".join(content.split())[:TITLE_LIMIT]
+            conversation.title = consultation_service.default_consultation_title(
+                session.kind, session.target_grade, session.target_semester
+            )
+            conversation.title_source = TitleSource.DEFAULT.value
 
         # 이 턴이 다시 signal_ready_to_conclude를 부르지 않으면 '준비됨'이 취소된다 —
         # 대화가 이어졌다는 것 자체가 상담이 아직 안 끝났다는 뜻이기 때문이다.
@@ -633,21 +1004,29 @@ async def stream_consultation_reply(
             .order_by(Message.created_at.desc())
             .limit(HISTORY_LIMIT)
         )
-        context = await build_context(db, user)
-        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+        # 생기부 확인 상담은 학기 계획 상담과 재료·도구·출력 규칙이 모두 다르다. 로드맵을
+        # 바꿀 도구는 주지 않는다(추천만 가능).
+        is_record_review = session.kind == ConsultationKind.RECORD_REVIEW.value
+        if is_record_review:
+            context: dict[str, Any] = {}
+            roadmap_summary = None
+            system_prompt = record_review_consultation.build_prompt(
+                record_review_consultation.student_facts(user),
+                await record_review_consultation.state(db, session),
+            )
+        else:
+            context = await build_context(db, user)
+            roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+            system_prompt = build_consultation_system_prompt(
+                session.kind,
+                json.dumps(context, ensure_ascii=False),
+                json.dumps(roadmap_summary, ensure_ascii=False)
+                if roadmap_summary is not None
+                else None,
+                consultation_progress(session),
+            )
 
-        llm_messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": build_consultation_system_prompt(
-                    session.kind,
-                    json.dumps(context, ensure_ascii=False),
-                    json.dumps(roadmap_summary, ensure_ascii=False)
-                    if roadmap_summary is not None
-                    else None,
-                ),
-            }
-        ]
+        llm_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         llm_messages.extend(
             {"role": m.role, "content": m.content} for m in reversed(list(history))
         )
@@ -656,9 +1035,15 @@ async def stream_consultation_reply(
         # 만들 수단(propose_draft_plan 등)은 아예 주지 않아, 챗봇이 로드맵을
         # 저장하려 시도할 수 없게 하면서도 목표 학과의 실제 입시 데이터는 조회하게 한다.
         is_graduate_fit = session.kind == ConsultationKind.GRADUATE_FIT.value
-        consultation_tools = (
-            GRADUATE_FIT_TOOL_SPECS if is_graduate_fit else CONSULTATION_TOOL_SPECS
-        )
+        # 도구 목록은 이 턴을 시작할 때의 단계로 한 번 정한다(tools_for_stage 참고).
+        if is_record_review:
+            consultation_tools = record_review_consultation.TOOL_SPECS
+        elif is_graduate_fit:
+            consultation_tools = GRADUATE_FIT_TOOL_SPECS
+        else:
+            consultation_tools = tools_for_stage(session)
+        # 이 턴에 마무리 신호를 보냈는지 — 그 턴에만 확정 버튼 안내를 허용한다.
+        signalled_conclude = False
 
         applied_actions: list[dict[str, Any]] = []
         answer_parts: list[str] = []
@@ -679,28 +1064,42 @@ async def stream_consultation_reply(
                         _merge_tool_call_deltas(tool_calls, delta.tool_calls)
 
                 raw_text = "".join(round_text)
-                visible_text = filter_consultation_output_for_period(
-                    _drop_dangling_fragment(raw_text) if tool_calls else raw_text,
-                    target_grade=session.target_grade,
-                    target_semester=session.target_semester,
-                    school_record_status=context["school_record_coverage"]["status"],
-                    has_declared_direction=bool(
-                        (context.get("memory", {}).get("career_goal") or {}).get("goal")
-                        or context.get("memory", {}).get("target_department")
-                        or context.get("memory", {}).get("interest_keywords")
-                    ),
-                    has_current_course_data=any(
-                        record.get("grade") == session.target_grade
-                        and record.get("semester") == session.target_semester
-                        for record in context.get("academic_performance", [])
-                    ),
-                    confirmed_plan_titles=[
-                        str(node.get("title", "")) for node in (roadmap_summary or [])
-                    ],
+                signalled_conclude = signalled_conclude or any(
+                    call["name"] == "signal_ready_to_conclude" for call in tool_calls.values()
+                )
+                spoken = _drop_dangling_fragment(raw_text) if tool_calls else raw_text
+                # 생기부 확인은 지난 학기 기록을 두고 이야기하는 대화다 — 학기 계획용 필터를
+                # 거치면 "1학년 1학기 성적이 달라요" 같은 문장이 통째로 지워진다.
+                visible_text = (
+                    spoken
+                    if is_record_review
+                    else filter_consultation_output_for_period(
+                        spoken,
+                        target_grade=session.target_grade,
+                        target_semester=session.target_semester,
+                        school_record_status=context["school_record_coverage"]["status"],
+                        has_declared_direction=bool(
+                            (context.get("memory", {}).get("career_goal") or {}).get("goal")
+                            or context.get("memory", {}).get("target_department")
+                            or context.get("memory", {}).get("interest_keywords")
+                        ),
+                        has_current_course_data=bool(context.get("current_semester_courses"))
+                        or any(
+                            record.get("grade") == session.target_grade
+                            and record.get("semester") == session.target_semester
+                            for record in context.get("academic_performance", [])
+                        ),
+                        confirmed_plan_titles=_known_plan_titles(session, roadmap_summary),
+                        allow_conclude_notice=signalled_conclude or is_graduate_fit,
+                        current_course_names=[
+                            str(course.get("subject", ""))
+                            for course in context.get("current_semester_courses", [])
+                        ],
+                    )
                 )
                 visible_text = _drop_repeated_exit_notice(
                     visible_text,
-                    already_given=any(_EXIT_NOTICE in part for part in answer_parts),
+                    already_given=any(_EXIT_NOTICE.search(part) for part in answer_parts),
                 ).strip()
                 if visible_text:
                     if answer_parts:
@@ -738,7 +1137,11 @@ async def stream_consultation_reply(
                         arguments = {}
                         result: dict[str, Any] = {"error": "도구 인자를 해석하지 못했습니다"}
                     else:
-                        if is_graduate_fit:
+                        if is_record_review:
+                            result = await record_review_consultation.execute_tool(
+                                db, session, call["name"], arguments
+                            )
+                        elif is_graduate_fit:
                             result = await execute_graduate_fit_tool(
                                 db, user, session, call["name"], arguments
                             )
@@ -804,149 +1207,11 @@ async def stream_consultation_reply(
             {
                 "message_id": str(assistant_message.id) if assistant_message else None,
                 "applied_actions": applied_actions,
+                "suggested_replies": await _generate_suggested_replies(
+                    "".join(answer_parts)
+                ),
             },
         )
 
         await db.refresh(session)
-        yield _sse(
-            "signal",
-            {
-                "ready": session.status == ConsultationStatus.READY.value,
-                "full_replan_confirmed": session.full_replan_confirmed_at is not None,
-            },
-        )
-
-
-async def stream_consultation_opening(
-    user_id: uuid.UUID,
-    session_id: uuid.UUID,
-) -> AsyncIterator[str]:
-    """상담 세션이 새로 열렸을 때 챗봇이 먼저 건네는 첫 인사.
-
-    학생이 아직 아무 말도 하지 않은 상태에서 모델이 직접 여는 말을 짓는다. 화면이
-    미리 적어 둔 고정 문구(예: "방금 만든 정밀 진단 리포트를 보고 있다")는 진단
-    근거가 없을 때도 항상 같은 말을 해 학생을 당황시켰다 — 이 턴은 실제
-    <진단_결과>·<학생_데이터>를 본 모델이 직접 여는 말을 짓게 해 그 문제를 없앤다.
-
-    이미 대화가 시작된(메시지가 있는) 세션에서는 다시 부르지 않는다 — 호출 측
-    (화면)이 메시지 목록이 비었을 때만 이 엔드포인트를 부르지만, 방어적으로
-    여기서도 한 번 더 막는다.
-
-    비용 관점에서 `enforce_daily_limit`은 걸지 않는다 — 세션당 한 번만 나가는
-    필수 관문의 시스템 발화라, 걸면 이미 그날 대화 한도를 다 쓴 학생이 정작
-    관문 자체를 시작하지 못하고 갇히게 된다.
-    """
-    async with AsyncSessionLocal() as db:
-        user = await db.get(User, user_id)
-        if user is None:
-            yield _sse("error", {"error_code": "USER_NOT_FOUND", "message": "사용자 없음"})
-            return
-
-        try:
-            session = await consultation_service.get_session(db, user_id, session_id)
-        except ConsultationSessionNotFoundError as exc:
-            yield _sse(
-                "error",
-                {"error_code": "CONSULTATION_SESSION_NOT_FOUND", "message": exc.message},
-            )
-            return
-
-        conversation_id = session.conversation_id
-        already_started = await db.scalar(
-            select(Message.id).where(Message.conversation_id == conversation_id).limit(1)
-        )
-        if already_started is not None:
-            yield _sse(
-                "error",
-                {
-                    "error_code": "CONSULTATION_ALREADY_STARTED",
-                    "message": "이미 시작된 상담입니다",
-                },
-            )
-            return
-
-        context = await build_context(db, user)
-        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
-
-        llm_messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": build_consultation_system_prompt(
-                    session.kind,
-                    json.dumps(context, ensure_ascii=False),
-                    json.dumps(roadmap_summary, ensure_ascii=False)
-                    if roadmap_summary is not None
-                    else None,
-                    opening=True,
-                ),
-            },
-            # 첫 인사를 이끌어낼 최소한의 신호. 학생에게 보이지도, 저장되지도 않는다.
-            {"role": "user", "content": "(상담을 시작해주세요.)"},
-        ]
-
-        round_text: list[str] = []
-        error_payload: dict[str, Any] | None = None
-
-        try:
-            async for chunk in stream_chat(llm_messages, None):
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    round_text.append(delta.content)
-        except asyncio.CancelledError:
-            raw_text = "".join(round_text)
-            visible_text = filter_consultation_output_for_period(
-                raw_text,
-                target_grade=session.target_grade,
-                target_semester=session.target_semester,
-                school_record_status=context["school_record_coverage"]["status"],
-            )
-            await asyncio.shield(
-                _persist_assistant_turn(
-                    db, conversation_id, ChatMode.NORMAL, visible_text, []
-                )
-            )
-            raise
-        except LLMUnavailableError as exc:
-            error_payload = {"error_code": "LLM_UNAVAILABLE", "message": exc.message}
-        except Exception:
-            logger.exception(
-                "consultation opening stream failed: session_id=%s", session_id
-            )
-            error_payload = {
-                "error_code": "LLM_UNAVAILABLE",
-                "message": "잠시 후 다시 시도해주세요",
-            }
-
-        raw_text = "".join(round_text)
-        visible_text = (
-            filter_consultation_output_for_period(
-                raw_text,
-                target_grade=session.target_grade,
-                target_semester=session.target_semester,
-                school_record_status=context["school_record_coverage"]["status"],
-                has_declared_direction=bool(
-                    (context.get("memory", {}).get("career_goal") or {}).get("goal")
-                    or context.get("memory", {}).get("target_department")
-                    or context.get("memory", {}).get("interest_keywords")
-                ),
-            )
-            if raw_text
-            else ""
-        )
-        if visible_text:
-            yield _sse("token", {"delta": visible_text})
-
-        assistant_message = await _persist_assistant_turn(
-            db, conversation_id, ChatMode.NORMAL, visible_text, []
-        )
-
-        if error_payload is not None:
-            yield _sse("error", error_payload)
-            return
-
-        yield _sse(
-            "done",
-            {"message_id": str(assistant_message.id) if assistant_message else None},
-        )
+        yield _sse("signal", await consultation_signal_for(db, session))

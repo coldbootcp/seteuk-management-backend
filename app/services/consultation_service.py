@@ -23,6 +23,7 @@ from app.models.conversation import (
     ConversationPurpose,
     Message,
     MessageRole,
+    TitleSource,
 )
 from app.models.roadmap import (
     Roadmap,
@@ -33,6 +34,7 @@ from app.models.roadmap import (
 )
 from app.models.user import User
 from app.schemas.consultation import ConsultationStatusResponse, DraftPlan
+from app.services.consultation_stage import STAGE_WRAP_UP, session_stage
 from app.services.roadmap.templates import (
     NARRATIVE_STAGES,
     RETROSPECT_OBJECTIVE,
@@ -55,6 +57,8 @@ async def has_concluded_for_period(
         select(ConsultationSession.id).where(
             ConsultationSession.user_id == user_id,
             ConsultationSession.status == ConsultationStatus.CONCLUDED.value,
+            # 생기부 확인 상담은 학기 상담이 아니다 — 마쳐도 관문을 열지 않는다.
+            ConsultationSession.kind != ConsultationKind.RECORD_REVIEW.value,
             ConsultationSession.target_grade == grade,
             ConsultationSession.target_semester == semester,
         )
@@ -68,6 +72,7 @@ async def has_ever_concluded(db: AsyncSession, user_id: uuid.UUID) -> bool:
         .where(
             ConsultationSession.user_id == user_id,
             ConsultationSession.status == ConsultationStatus.CONCLUDED.value,
+            ConsultationSession.kind != ConsultationKind.RECORD_REVIEW.value,
         )
         .limit(1)
     )
@@ -150,7 +155,14 @@ async def get_or_create_session(db: AsyncSession, user: User) -> ConsultationSes
     else:
         kind = ConsultationKind.SEMESTER_REVIEW.value
         purpose = ConversationPurpose.SEMESTER_REVIEW_CONSULTATION.value
-    conversation = Conversation(user_id=user.id, purpose=purpose)
+    # 상담 대화는 학생의 첫 말을 제목으로 쓰지 않는다 — 무엇을 하는 대화인지가
+    # 처음부터 정해져 있으므로 그 목적을 제목으로 붙인다.
+    conversation = Conversation(
+        user_id=user.id,
+        purpose=purpose,
+        title=default_consultation_title(kind, user.current_grade, user.current_semester),
+        title_source=TitleSource.DEFAULT.value,
+    )
     db.add(conversation)
     await db.flush()
 
@@ -166,6 +178,16 @@ async def get_or_create_session(db: AsyncSession, user: User) -> ConsultationSes
     await db.commit()
     await db.refresh(session)
     return session
+
+
+def default_consultation_title(kind: str, grade: int, semester: int) -> str:
+    if kind == ConsultationKind.INITIAL.value:
+        return "3개년 흐름 설계"
+    if kind == ConsultationKind.GRADUATE_FIT.value:
+        return "목표 학과 지원 전략"
+    if kind == ConsultationKind.RECORD_REVIEW.value:
+        return "생기부 확인"
+    return f"{grade}학년 {semester}학기 점검"
 
 
 async def get_active_plan_summary(db: AsyncSession, user: User) -> list[dict] | None:
@@ -208,14 +230,44 @@ async def confirm_full_replan(
     """재평가 상담 도중 챗봇이 '전체 재설계'를 제안했을 때, 대화 텍스트가 아니라
     이 명시적 엔드포인트로만 동의를 받는다."""
     session = await get_session(db, user_id, session_id)
+    session.full_replan_confirmed_at = datetime.now(UTC) if confirmed else None
+    # 동의하면 3개년 흐름부터 다시 세우므로, 기존 흐름 위에서 정한 학기 목표·주제
+    # 초안은 근거를 잃는다. 동의를 철회해도 전체 재설계용 흐름·초안이 남아 있으면
+    # 동의 없이 전체 계획을 바꾸는 우회로가 되므로 함께 버린다.
+    _reset_downstream_of_flow(session, clear_flow=True)
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+def _reset_downstream_of_flow(session: ConsultationSession, *, clear_flow: bool) -> None:
+    if clear_flow:
+        session.draft_flow = None
+    session.flow_confirmed_at = None
+    session.semester_goal = None
+    session.draft_plan = None
+    if session.status == ConsultationStatus.READY.value:
+        session.status = ConsultationStatus.IN_PROGRESS.value
+        session.ready_at = None
+
+
+async def confirm_flow(
+    db: AsyncSession, user_id: uuid.UUID, session_id: uuid.UUID, confirmed: bool
+) -> ConsultationSession:
+    """학생이 상담 화면의 흐름 카드에서 '이 흐름으로 확정'을 눌렀을 때만 호출된다.
+    대화 텍스트("좋아요")로는 흐름이 확정되지 않는다 — 3개년 흐름은 이후 학기 목표와
+    주제의 근거가 되는 큰 결정이라, 학생이 무엇에 동의했는지가 버튼으로 남아야 한다."""
+    session = await get_session(db, user_id, session_id)
+    if session.status == ConsultationStatus.CONCLUDED.value:
+        raise ConsultationNotReadyError("이미 끝난 상담입니다")
+    if session.draft_flow is None:
+        raise ConsultationNotReadyError("아직 제안된 3개년 흐름이 없습니다")
     if confirmed:
-        session.full_replan_confirmed_at = datetime.now(UTC)
+        session.flow_confirmed_at = datetime.now(UTC)
     else:
-        session.full_replan_confirmed_at = None
-        if session.draft_plan and session.draft_plan.get("mode") == "full_replan":
-            # 동의를 철회하면 이미 담긴 전체 재설계 초안도 함께 버린다 — 동의 없이
-            # 전체 계획이 남아 있으면 다음 propose_draft_plan 검증을 우회할 여지가 있다.
-            session.draft_plan = None
+        # 흐름을 다시 조율하겠다는 뜻 — 초안은 남겨 두고(고칠 출발점) 그 위에
+        # 쌓은 학기 목표·주제만 되돌린다.
+        _reset_downstream_of_flow(session, clear_flow=False)
     await db.commit()
     await db.refresh(session)
     return session
@@ -361,7 +413,8 @@ async def conclude(
     db: AsyncSession, user: User, session: ConsultationSession
 ) -> ConsultationSession:
     """도구 호출의 부수효과가 아니라 오직 이 함수(POST .../conclude)로만 실행된다.
-    챗봇이 signal_ready_to_conclude를 부른 뒤 학생이 실제로 나가기 버튼을 눌러야
+    챗봇이 signal_ready_to_conclude를 부른 뒤 학생이 실제로
+    "상담 마치고 메인 화면으로" 버튼을 눌러야
     한다는 요구를 그대로 구현한다."""
     # 졸업생 적합성 상담은 로드맵을 만들지 않는다 — draft_plan 없이 대화만으로
     # 끝나며, 세션만 완료 처리한다. 다만 로드맵 draft라는 "충분히 상담했다"는
@@ -391,7 +444,11 @@ async def conclude(
         await db.refresh(session)
         return session
 
-    if session.status != ConsultationStatus.READY.value or session.draft_plan is None:
+    if (
+        session.status != ConsultationStatus.READY.value
+        or session.draft_plan is None
+        or session_stage(session) != STAGE_WRAP_UP
+    ):
         raise ConsultationNotReadyError(
             "아직 상담이 끝나지 않았습니다 — 챗봇이 준비됐다는 신호를 보내야 합니다"
         )

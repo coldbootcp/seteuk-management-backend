@@ -14,7 +14,8 @@ from app.schemas.profile import (
     SuggestRequest,
     SuggestResponse,
 )
-from app.services import profile_service
+from app.schemas.subject import CurrentCoursesRequest, CurrentCoursesResponse
+from app.services import course_service, profile_service
 
 router = APIRouter(
     prefix="/profile", tags=["profile"], dependencies=[Depends(get_active_verified_user)]
@@ -49,3 +50,24 @@ async def suggest_direction(
     학생이 고른 값만 POST /profile로 확정된다."""
     await enforce_daily_limit(db, user.id, UsageAction.CHAT_MESSAGE)
     return await profile_service.suggest_direction(data.career_goal)
+
+
+@router.get("/current-courses", response_model=CurrentCoursesResponse)
+async def get_current_courses(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CurrentCoursesResponse:
+    """지금 학년·학기에 듣는 과목. 상담 챗봇이 이번 학기 주제를 과목과 연결하는 근거다."""
+    return await course_service.get_current_courses(db, user)
+
+
+@router.put("/current-courses", response_model=CurrentCoursesResponse)
+async def set_current_courses(
+    data: CurrentCoursesRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CurrentCoursesResponse:
+    """이번 학기 수강 과목을 학생이 고른 목록으로 맞춘다. 과목은 카탈로그 코드로 고르고,
+    목록에 없는 학교 자체 과목만 이름으로 받는다. 생기부·성적으로 이미 있는 과목은
+    지우지 않는다."""
+    return await course_service.set_current_courses(db, user, data.courses)

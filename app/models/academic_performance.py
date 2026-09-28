@@ -42,6 +42,9 @@ class AcademicPerformance(Base):
     roadmap_node_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roadmap_nodes.id", ondelete="SET NULL"), nullable=True
     )
+    # 과목 카탈로그(app/services/subject_catalog.py)의 코드. 학생이 후보에서 고른 과목만
+    # 채워진다 — 생기부 파싱으로 들어온 행과 "기타"로 직접 입력한 과목은 비어 있다.
+    subject_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # 학생이 성적에 붙이는 짧은 메모(시험 범위가 달랐다는 등).
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     rank: Mapped[str | None] = mapped_column(String(20), nullable=True)

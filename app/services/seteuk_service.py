@@ -12,10 +12,11 @@ from app.models.activity import Activity
 from app.models.attendance import Attendance
 from app.models.award import Award
 from app.models.reading_activity import ReadingActivity
-from app.models.seteuk_upload import SeteukUpload, UploadStatus
+from app.models.seteuk_upload import SeteukUpload, UploadMode, UploadStatus
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
-from app.schemas.seteuk import ParseError, SeteukAnalysisResult
+from app.schemas.seteuk import ParseError, RecordReview, SeteukAnalysisResult
+from app.services import record_review
 from app.services.parser.pipeline import parse_seteuk_pdf
 
 
@@ -25,6 +26,7 @@ async def create_upload(
     file_bytes: bytes,
     file_name: str | None = None,
     content_type: str | None = None,
+    mode: UploadMode = UploadMode.ONBOARDING,
 ) -> SeteukUpload:
     """업로드 원본을 계정에 보관한다(통합 결정 P-1). 예전 방침은 "PDF 원본은 저장하지
     않는다"였지만, 학생이 나중에 자기가 올린 파일을 다시 확인할 수 있어야 한다는
@@ -39,6 +41,7 @@ async def create_upload(
         content_type=content_type,
         size_bytes=len(file_bytes),
         content=file_bytes,
+        mode=mode.value,
     )
     db.add(upload)
     await db.flush()
@@ -272,7 +275,12 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
             document_period = _max_document_period(result)
             period_known = expected_period is not None and document_period is not None
 
-            if period_known:
+            replacing = upload.mode == UploadMode.REPLACE.value
+            original = result
+
+            # 교체 업로드는 여기서 반려하지 않는다 — 어긋남은 이상(anomaly)으로 남겨 학생에게
+            # 해명을 듣고 정한다(record_review).
+            if period_known and not replacing:
                 expected_grade, expected_semester = expected_period
                 document_grade, document_semester = document_period
                 # 학년 자체가 계산된 것보다 높거나, 같은 학년이어도 그 학년 안에
@@ -324,11 +332,71 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
 
             upload.raw_result = result.model_dump(mode="json")
             upload.status = UploadStatus.DONE.value
+            if replacing and user is not None:
+                await _review_replacement(db, upload, user, original, expected_period)
         except Exception as exc:
             upload.status = UploadStatus.FAILED.value
             upload.failure_reason = f"{type(exc).__name__}: {exc}"
 
         await db.commit()
+
+
+async def _review_replacement(
+    db: AsyncSession,
+    upload: SeteukUpload,
+    user: User,
+    original: SeteukAnalysisResult,
+    expected_period: tuple[int, int] | None,
+) -> None:
+    """교체 업로드를 학생 기록과 대조하고, 이상·충돌이 없으면 바로 반영한다."""
+    # 반영 단계(import_result)와 같은 기준으로 거른 결과에 순번을 매긴다.
+    filtered = _filter_future_grade_data(original, user.current_grade, user.current_semester)
+    anomalies = record_review.detect_anomalies(
+        user, original, filtered, expected_period=expected_period
+    )
+    review, extra = await record_review.compare_with_student_records(db, user, filtered)
+    review.anomalies = anomalies + extra
+    if review.anomalies or review.conflicts:
+        review.state = "needs_review"
+        upload.review = review.model_dump(mode="json")
+        return
+    await db.commit()  # 반영(import_result)이 DONE 상태의 업로드를 다시 읽는다.
+    review.imported = await apply_reviewed_import(db, user.id, upload, review)
+    review.state = "clean_imported"
+    upload.review = review.model_dump(mode="json")
+
+
+async def apply_reviewed_import(
+    db: AsyncSession, user_id: uuid.UUID, upload: SeteukUpload, review: RecordReview
+) -> dict[str, int]:
+    """대조 결과대로 반영한다 — 중복은 빼고, 빈칸 수강 과목은 생기부 성적으로 채운다."""
+    user = await db.get(User, user_id)
+    raw = SeteukAnalysisResult.model_validate(upload.raw_result)
+    filtered = _filter_future_grade_data(
+        raw, user.current_grade if user else None, user.current_semester if user else None
+    )
+    rows = {}
+    if review.fill_placeholders:
+        rows = {
+            str(row.id): row
+            for row in await db.scalars(
+                select(AcademicPerformance).where(
+                    AcademicPerformance.user_id == user_id,
+                    AcademicPerformance.source_upload_id.is_(None),
+                    AcademicPerformance.id.in_(
+                        [uuid.UUID(row_id) for row_id in review.fill_placeholders]
+                    ),
+                )
+            )
+        }
+    filled = record_review.fill_placeholder_rows(rows, filtered, review.fill_placeholders)
+    # 모든 영역을 지정한다 — 지정한 영역만 이전 생기부 행을 갈아치우므로, 교체는 전부 지정해야
+    # 옛 생기부에서 온 행이 남지 않는다.
+    selection = ImportSelection(
+        **{name: review.import_plan.get(name, []) for name in record_review.SECTIONS}
+    )
+    imported = await import_result(db, user_id, upload.id, selection)
+    return {**imported, "filled_placeholders": filled}
 
 
 async def get_upload(db: AsyncSession, user_id: uuid.UUID, upload_id: uuid.UUID) -> SeteukUpload:

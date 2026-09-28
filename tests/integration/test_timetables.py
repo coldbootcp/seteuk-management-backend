@@ -88,3 +88,29 @@ async def test_timetable_sync_rejects_another_users_id(
         },
     )
     assert response.status_code == 404
+
+
+async def test_timetable_slots_keep_catalog_codes_and_reject_unknown_ones(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    def payload(slot: dict) -> dict:
+        return {
+            "timetables": [
+                {"name": "기본", "grade": 2, "semester": 1, "is_default": True, "slots": [slot]}
+            ]
+        }
+
+    picked = {**_slot("slot-a", "대수"), "subject_code": "2022:대수"}
+    response = await client.put("/api/v1/timetables", headers=auth_headers, json=payload(picked))
+    assert response.status_code == 200
+    assert response.json()["timetables"][0]["slots"][0]["subject_code"] == "2022:대수"
+
+    # 기타로 직접 적은 과목(과 예전에 저장된 칸)은 코드 없이 저장된다.
+    custom = _slot("slot-b", "학교 자율 탐구")
+    response = await client.put("/api/v1/timetables", headers=auth_headers, json=payload(custom))
+    assert response.status_code == 200
+    assert response.json()["timetables"][0]["slots"][0]["subject_code"] is None
+
+    made_up = {**_slot("slot-c", "수학"), "subject_code": "2022:없는과목"}
+    response = await client.put("/api/v1/timetables", headers=auth_headers, json=payload(made_up))
+    assert response.status_code == 422

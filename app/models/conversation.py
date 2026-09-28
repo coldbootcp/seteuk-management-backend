@@ -32,6 +32,17 @@ class ConversationPurpose(StrEnum):
     INITIAL_CONSULTATION = "initial_consultation"
     SEMESTER_REVIEW_CONSULTATION = "semester_review_consultation"
     GRADUATE_FIT_CONSULTATION = "graduate_fit_consultation"
+    RECORD_REVIEW_CONSULTATION = "record_review_consultation"
+
+
+class TitleSource(StrEnum):
+    """대화 제목이 어디서 왔는가. 학생이 직접 고친 제목(user)은 어떤 자동 경로도
+    덮어쓰지 않는다. default는 상담처럼 목적이 정해진 대화의 고정 제목, auto는 대화
+    내용에서 주제를 읽어 지은 제목이다."""
+
+    DEFAULT = "default"
+    AUTO = "auto"
+    USER = "user"
 
 
 class Conversation(Base):
@@ -44,6 +55,7 @@ class Conversation(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
     purpose: Mapped[str] = mapped_column(
         String(40), nullable=False, default=ConversationPurpose.GENERAL.value
     )

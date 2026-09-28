@@ -16,7 +16,7 @@ from app.db.session import get_db
 from app.models.conversation import Conversation
 from app.models.usage_event import UsageAction
 from app.models.user import User
-from app.schemas.chat import ConversationRead, MessageCreate, MessageRead
+from app.schemas.chat import ConversationRead, ConversationUpdate, MessageCreate, MessageRead
 from app.schemas.records import ListResponse
 from app.services import chat_service, record_service
 
@@ -59,6 +59,20 @@ async def list_conversations(
     return ListResponse[ConversationRead](
         items=[ConversationRead.model_validate(row) for row in rows], total=total
     )
+
+
+@router.patch("/{conversation_id}", response_model=ConversationRead)
+async def rename_conversation(
+    conversation_id: uuid.UUID,
+    data: ConversationUpdate,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConversationRead:
+    """대화 제목을 학생이 직접 고친다. 고친 제목은 자동 제목 생성이 덮어쓰지 않는다."""
+    conversation = await chat_service.rename_conversation(
+        db, user.id, conversation_id, data.title
+    )
+    return ConversationRead.model_validate(conversation)
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

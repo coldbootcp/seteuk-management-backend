@@ -12,10 +12,21 @@ import uuid
 from datetime import date as date_type
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.activity import ActivityCategory, ActivityType
 from app.models.calendar_event import CalendarEventType
+from app.services.subject_catalog import get_subject
+
+
+def check_subject_code(value: str | None) -> str | None:
+    """과목 코드는 카탈로그에 있는 것만 받는다 — 지어낸 코드로 과목 데이터와 잘못 이어지지
+    않게 한다. 카탈로그에 없는 과목은 코드 없이 과목명만 저장한다("기타")."""
+    if value is None:
+        return None
+    if get_subject(value) is None:
+        raise ValueError("과목 목록에 없는 과목 코드입니다")
+    return value
 
 
 class ListResponse[T](BaseModel):
@@ -75,6 +86,10 @@ class AcademicPerformanceCreate(BaseModel):
     # 이 과목이 어느 로드맵 마디를 위한 수강인지(D-3). 생기부 파싱으로 들어온
     # 행은 비어 있고, 학생이 로드맵에서 과목을 고를 때 채워진다.
     roadmap_node_id: uuid.UUID | None = None
+    # 과목 카탈로그 코드(예: "2022:대수"). 주면 카탈로그에 있는 코드여야 한다.
+    subject_code: str | None = None
+
+    _check_subject_code = field_validator("subject_code")(check_subject_code)
 
 
 class AcademicPerformanceUpdate(BaseModel):
@@ -93,6 +108,9 @@ class AcademicPerformanceUpdate(BaseModel):
     # 이 과목이 어느 로드맵 마디를 위한 수강인지(D-3). 생기부 파싱으로 들어온
     # 행은 비어 있고, 학생이 로드맵에서 과목을 고를 때 채워진다.
     roadmap_node_id: uuid.UUID | None = None
+    subject_code: str | None = None
+
+    _check_subject_code = field_validator("subject_code")(check_subject_code)
 
 
 class AcademicPerformanceRead(RecordBase):
@@ -109,6 +127,7 @@ class AcademicPerformanceRead(RecordBase):
     rank: str | None
     note: str | None
     roadmap_node_id: uuid.UUID | None
+    subject_code: str | None = None
 
 
 # --- 독서 활동 ------------------------------------------------------------
