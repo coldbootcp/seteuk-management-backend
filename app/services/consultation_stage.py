@@ -16,6 +16,7 @@ STAGE_SEMESTER_GOAL = "semester_goal"
 STAGE_TOPICS = "topics"
 STAGE_WRAP_UP = "wrap_up"
 STAGE_GRADUATE_FIT = "graduate_fit"
+STAGE_RECORD_REVIEW = "record_review"
 
 STAGE_ORDER = [STAGE_FLOW, STAGE_SEMESTER_GOAL, STAGE_TOPICS, STAGE_WRAP_UP]
 
@@ -25,6 +26,7 @@ STAGE_LABELS = {
     STAGE_TOPICS: "구체 탐구 주제 정하기",
     STAGE_WRAP_UP: "초안 확인과 마무리",
     STAGE_GRADUATE_FIT: "목표 학과 적합성 상담",
+    STAGE_RECORD_REVIEW: "생기부 확인",
 }
 
 # 3개년 흐름의 서사 단계 이름. roadmap/templates.py의 NARRATIVE_STAGES와 같은 순서.
@@ -66,6 +68,8 @@ def compute_stage(
 ) -> str:
     if kind == "graduate_fit":
         return STAGE_GRADUATE_FIT
+    if kind == "record_review":
+        return STAGE_RECORD_REVIEW
     if needs_flow(kind, full_replan_confirmed) and not (has_flow and flow_confirmed):
         return STAGE_FLOW
     if not has_semester_goal:

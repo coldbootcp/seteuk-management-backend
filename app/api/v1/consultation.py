@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
-from app.models.consultation import ConsultationSession, ConsultationStatus
+from app.models.consultation import ConsultationKind, ConsultationSession, ConsultationStatus
 from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.chat import MessageRead
@@ -19,7 +19,7 @@ from app.schemas.consultation import (
     ConsultationSessionRead,
     ConsultationStatusResponse,
 )
-from app.services import chat_service, consultation_service
+from app.services import chat_service, consultation_service, record_review_consultation
 from app.services.consultation_stage import session_stage
 
 # 관문(require_consultation_satisfied)을 걸지 않는다 — 여기가 관문을 풀기 위한
@@ -42,6 +42,14 @@ def _to_read(session: ConsultationSession) -> ConsultationSessionRead:
         flow_confirmed=session.flow_confirmed_at is not None,
         semester_goal=session.semester_goal,
     )
+
+
+async def _read(db: AsyncSession, session: ConsultationSession) -> ConsultationSessionRead:
+    """_to_read에 생기부 확인 상담의 현황(DB 조회가 필요)을 덧붙인다."""
+    read = _to_read(session)
+    if session.kind == ConsultationKind.RECORD_REVIEW.value:
+        read.record_review = await record_review_consultation.state(db, session)
+    return read
 
 
 @router.get("/status", response_model=ConsultationStatusResponse)
@@ -68,7 +76,7 @@ async def get_session(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_session(db, user.id, session_id)
-    return _to_read(session)
+    return await _read(db, session)
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
@@ -149,5 +157,20 @@ async def conclude_session(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConsultationSessionRead:
     session = await consultation_service.get_session(db, user.id, session_id)
+    if session.kind == ConsultationKind.RECORD_REVIEW.value:
+        # 생기부 확인 상담은 로드맵이 아니라 생기부를 반영한다(정한 범위·충돌 선택대로).
+        await record_review_consultation.conclude(db, user, session)
+        return await _read(db, session)
     session = await consultation_service.conclude(db, user, session)
     return _to_read(session)
+
+
+@router.post("/record-review", response_model=ConsultationSessionRead)
+async def create_or_resume_record_review(
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConsultationSessionRead:
+    """확인을 기다리는 교체 업로드(설정 탭 생기부 올리기)의 확인 상담을 열거나 이어 간다.
+    확인할 생기부가 없으면 409(CONSULTATION_NOT_READY)."""
+    session = await record_review_consultation.get_or_create_session(db, user)
+    return await _read(db, session)

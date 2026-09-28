@@ -924,7 +924,26 @@ data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해�
 
 ---
 
+**생기부 확인 상담 (`kind=record_review`)** — 설정 탭 교체 업로드가 `needs_review`로 멈췄을 때
+(3.2 참고) 학생에게 해명을 듣고 반영 방법을 정한다. **관문과 무관하다** — 마쳐도 학기 상담 완료로
+치지 않는다(`has_concluded_for_period`·`has_ever_concluded`가 이 종류를 뺀다). 다른 기능을 막지 않는다.
+
+- **POST /consultation/record-review** → `ConsultationSessionRead`(`kind: "record_review"`,
+  `stage: "record_review"`, `record_review: { anomalies, conflicts[+choice], scope, outstanding,
+  ready, concluded, result_state, imported }`). 확인을 기다리는 업로드가 없으면 409. 같은 업로드면
+  진행 중인 세션을 이어 간다.
+- 대화·첫 인사는 기존 `POST /sessions/{id}/messages`·`/opening`을 쓴다. 이 종류는 전용 프롬프트와
+  도구(`set_record_scope`: all/until/none, `resolve_record_conflict`: keep_mine/use_record/keep_both,
+  `signal_ready_to_conclude`)만 쓰고, 학기 계획용 출력 필터를 거치지 않는다. 로드맵을 바꿀 도구는
+  없다(재설계는 추천만). 턴 끝 `signal`에 `record_review` 현황이 실린다.
+- 정할 것(`outstanding`: 이상이 있으면 반영 범위, 반영한다면 충돌마다 선택)이 남아 있으면
+  `signal_ready_to_conclude`와 `conclude`가 거부된다(409).
+- **POST /sessions/{id}/conclude**(이 종류): 정한 대로 반영한다. `none`이면 반영하지 않고 업로드를
+  `discarded`로, 아니면 중복을 뺀 계획에 `use_record`·`keep_both` 항목을 더하고 `until` 범위 밖을 뺀 뒤
+  반영하며, `use_record`를 고른 학생 기록은 지운다(업로드 `resolved`).
+
 ## 4. 공통 규칙
+
 
 ### 4.1 에러
 

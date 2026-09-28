@@ -32,6 +32,7 @@ class ConversationPurpose(StrEnum):
     INITIAL_CONSULTATION = "initial_consultation"
     SEMESTER_REVIEW_CONSULTATION = "semester_review_consultation"
     GRADUATE_FIT_CONSULTATION = "graduate_fit_consultation"
+    RECORD_REVIEW_CONSULTATION = "record_review_consultation"
 
 
 class TitleSource(StrEnum):

@@ -32,6 +32,8 @@ class ConsultationSessionRead(BaseModel):
     flow: dict[str, Any] | None = None
     flow_confirmed: bool = False
     semester_goal: dict[str, Any] | None = None
+    # 생기부 확인 상담(kind=record_review)의 현황 — 이상·충돌·학생 결정·남은 것·확정 결과.
+    record_review: dict[str, Any] | None = None
 
 
 class ConfirmFullReplanRequest(BaseModel):

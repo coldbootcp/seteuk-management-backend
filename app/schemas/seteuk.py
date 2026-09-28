@@ -170,9 +170,10 @@ class RecordReview(BaseModel):
 
     - clean_imported: 이상·충돌이 없어 서버가 바로 반영했다.
     - needs_review: 이상이나 충돌이 있어 반영하지 않고 확인을 기다린다.
+    - resolved / discarded: 생기부 확인 상담에서 정한 대로 반영했다 / 반영하지 않기로 했다.
     """
 
-    state: Literal["clean_imported", "needs_review"]
+    state: Literal["clean_imported", "needs_review", "resolved", "discarded"]
     anomalies: list[RecordAnomaly] = []
     conflicts: list[RecordConflict] = []
     # 영역별로 반영할 순번(중복을 뺀 것). 확인을 마치고 반영할 때 그대로 쓴다.

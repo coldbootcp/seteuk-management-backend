@@ -30,7 +30,7 @@ from app.db.session import AsyncSessionLocal
 from app.models.consultation import ConsultationKind, ConsultationStatus
 from app.models.conversation import ChatMode, Conversation, Message, MessageRole, TitleSource
 from app.models.user import User
-from app.services import consultation_service
+from app.services import consultation_service, record_review_consultation
 from app.services.chat.consultation_prompts import build_consultation_system_prompt
 from app.services.chat.consultation_tools import (
     GRADUATE_FIT_TOOL_SPECS,
@@ -800,6 +800,17 @@ def consultation_signal(session: Any) -> dict[str, Any]:
     }
 
 
+async def consultation_signal_for(db: AsyncSession, session: Any) -> dict[str, Any]:
+    """signal 이벤트 내용. 생기부 확인 상담은 흐름 카드 대신 확인 현황을 싣는다."""
+    if session.kind == ConsultationKind.RECORD_REVIEW.value:
+        return {
+            "ready": session.status == ConsultationStatus.READY.value,
+            "stage": session_stage(session),
+            "record_review": await record_review_consultation.state(db, session),
+        }
+    return consultation_signal(session)
+
+
 def _known_plan_titles(session: Any, roadmap_summary: list[dict] | None) -> list[str]:
     """출력 필터가 '이미 계획에 있다'는 문장을 허용할 근거 — 확정된 로드맵 제목과
     이 상담에서 실제로 저장한 흐름·학기 목표 제목. 여기 없는 제목을 기존 계획처럼
@@ -872,24 +883,29 @@ async def stream_consultation_opening(
             yield _sse("done", {"message_id": None, "applied_actions": []})
             return
 
-        context = await build_context(db, user)
-        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
-        system_prompt = build_consultation_system_prompt(
-            session.kind,
-            json.dumps(context, ensure_ascii=False),
-            json.dumps(roadmap_summary, ensure_ascii=False)
-            if roadmap_summary is not None
-            else None,
-            consultation_progress(session),
-        )
+        if session.kind == ConsultationKind.RECORD_REVIEW.value:
+            system_prompt = record_review_consultation.build_prompt(
+                record_review_consultation.student_facts(user),
+                await record_review_consultation.state(db, session),
+            )
+            instruction = record_review_consultation.opening_instruction()
+        else:
+            context = await build_context(db, user)
+            roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+            system_prompt = build_consultation_system_prompt(
+                session.kind,
+                json.dumps(context, ensure_ascii=False),
+                json.dumps(roadmap_summary, ensure_ascii=False)
+                if roadmap_summary is not None
+                else None,
+                consultation_progress(session),
+            )
+            instruction = _opening_instruction(session)
         # 학생 발화 대신, 여는 말을 건네라는 지시를 준다. 이 지시문은 저장하지 않고
         # (학생에게 보이지 않아야 한다), 생성된 인사만 어시스턴트 메시지로 남긴다.
         llm_messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": _opening_instruction(session),
-            },
+            {"role": "user", "content": instruction},
         ]
 
         answer_parts: list[str] = []
@@ -988,22 +1004,29 @@ async def stream_consultation_reply(
             .order_by(Message.created_at.desc())
             .limit(HISTORY_LIMIT)
         )
-        context = await build_context(db, user)
-        roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+        # 생기부 확인 상담은 학기 계획 상담과 재료·도구·출력 규칙이 모두 다르다. 로드맵을
+        # 바꿀 도구는 주지 않는다(추천만 가능).
+        is_record_review = session.kind == ConsultationKind.RECORD_REVIEW.value
+        if is_record_review:
+            context: dict[str, Any] = {}
+            roadmap_summary = None
+            system_prompt = record_review_consultation.build_prompt(
+                record_review_consultation.student_facts(user),
+                await record_review_consultation.state(db, session),
+            )
+        else:
+            context = await build_context(db, user)
+            roadmap_summary = await consultation_service.get_active_plan_summary(db, user)
+            system_prompt = build_consultation_system_prompt(
+                session.kind,
+                json.dumps(context, ensure_ascii=False),
+                json.dumps(roadmap_summary, ensure_ascii=False)
+                if roadmap_summary is not None
+                else None,
+                consultation_progress(session),
+            )
 
-        llm_messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": build_consultation_system_prompt(
-                    session.kind,
-                    json.dumps(context, ensure_ascii=False),
-                    json.dumps(roadmap_summary, ensure_ascii=False)
-                    if roadmap_summary is not None
-                    else None,
-                    consultation_progress(session),
-                ),
-            }
-        ]
+        llm_messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         llm_messages.extend(
             {"role": m.role, "content": m.content} for m in reversed(list(history))
         )
@@ -1013,9 +1036,12 @@ async def stream_consultation_reply(
         # 저장하려 시도할 수 없게 하면서도 목표 학과의 실제 입시 데이터는 조회하게 한다.
         is_graduate_fit = session.kind == ConsultationKind.GRADUATE_FIT.value
         # 도구 목록은 이 턴을 시작할 때의 단계로 한 번 정한다(tools_for_stage 참고).
-        consultation_tools = (
-            GRADUATE_FIT_TOOL_SPECS if is_graduate_fit else tools_for_stage(session)
-        )
+        if is_record_review:
+            consultation_tools = record_review_consultation.TOOL_SPECS
+        elif is_graduate_fit:
+            consultation_tools = GRADUATE_FIT_TOOL_SPECS
+        else:
+            consultation_tools = tools_for_stage(session)
         # 이 턴에 마무리 신호를 보냈는지 — 그 턴에만 확정 버튼 안내를 허용한다.
         signalled_conclude = False
 
@@ -1041,28 +1067,35 @@ async def stream_consultation_reply(
                 signalled_conclude = signalled_conclude or any(
                     call["name"] == "signal_ready_to_conclude" for call in tool_calls.values()
                 )
-                visible_text = filter_consultation_output_for_period(
-                    _drop_dangling_fragment(raw_text) if tool_calls else raw_text,
-                    target_grade=session.target_grade,
-                    target_semester=session.target_semester,
-                    school_record_status=context["school_record_coverage"]["status"],
-                    has_declared_direction=bool(
-                        (context.get("memory", {}).get("career_goal") or {}).get("goal")
-                        or context.get("memory", {}).get("target_department")
-                        or context.get("memory", {}).get("interest_keywords")
-                    ),
-                    has_current_course_data=bool(context.get("current_semester_courses"))
-                    or any(
-                        record.get("grade") == session.target_grade
-                        and record.get("semester") == session.target_semester
-                        for record in context.get("academic_performance", [])
-                    ),
-                    confirmed_plan_titles=_known_plan_titles(session, roadmap_summary),
-                    allow_conclude_notice=signalled_conclude or is_graduate_fit,
-                    current_course_names=[
-                        str(course.get("subject", ""))
-                        for course in context.get("current_semester_courses", [])
-                    ],
+                spoken = _drop_dangling_fragment(raw_text) if tool_calls else raw_text
+                # 생기부 확인은 지난 학기 기록을 두고 이야기하는 대화다 — 학기 계획용 필터를
+                # 거치면 "1학년 1학기 성적이 달라요" 같은 문장이 통째로 지워진다.
+                visible_text = (
+                    spoken
+                    if is_record_review
+                    else filter_consultation_output_for_period(
+                        spoken,
+                        target_grade=session.target_grade,
+                        target_semester=session.target_semester,
+                        school_record_status=context["school_record_coverage"]["status"],
+                        has_declared_direction=bool(
+                            (context.get("memory", {}).get("career_goal") or {}).get("goal")
+                            or context.get("memory", {}).get("target_department")
+                            or context.get("memory", {}).get("interest_keywords")
+                        ),
+                        has_current_course_data=bool(context.get("current_semester_courses"))
+                        or any(
+                            record.get("grade") == session.target_grade
+                            and record.get("semester") == session.target_semester
+                            for record in context.get("academic_performance", [])
+                        ),
+                        confirmed_plan_titles=_known_plan_titles(session, roadmap_summary),
+                        allow_conclude_notice=signalled_conclude or is_graduate_fit,
+                        current_course_names=[
+                            str(course.get("subject", ""))
+                            for course in context.get("current_semester_courses", [])
+                        ],
+                    )
                 )
                 visible_text = _drop_repeated_exit_notice(
                     visible_text,
@@ -1104,7 +1137,11 @@ async def stream_consultation_reply(
                         arguments = {}
                         result: dict[str, Any] = {"error": "도구 인자를 해석하지 못했습니다"}
                     else:
-                        if is_graduate_fit:
+                        if is_record_review:
+                            result = await record_review_consultation.execute_tool(
+                                db, session, call["name"], arguments
+                            )
+                        elif is_graduate_fit:
                             result = await execute_graduate_fit_tool(
                                 db, user, session, call["name"], arguments
                             )
@@ -1177,4 +1214,4 @@ async def stream_consultation_reply(
         )
 
         await db.refresh(session)
-        yield _sse("signal", consultation_signal(session))
+        yield _sse("signal", await consultation_signal_for(db, session))

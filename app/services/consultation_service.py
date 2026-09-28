@@ -57,6 +57,8 @@ async def has_concluded_for_period(
         select(ConsultationSession.id).where(
             ConsultationSession.user_id == user_id,
             ConsultationSession.status == ConsultationStatus.CONCLUDED.value,
+            # 생기부 확인 상담은 학기 상담이 아니다 — 마쳐도 관문을 열지 않는다.
+            ConsultationSession.kind != ConsultationKind.RECORD_REVIEW.value,
             ConsultationSession.target_grade == grade,
             ConsultationSession.target_semester == semester,
         )
@@ -70,6 +72,7 @@ async def has_ever_concluded(db: AsyncSession, user_id: uuid.UUID) -> bool:
         .where(
             ConsultationSession.user_id == user_id,
             ConsultationSession.status == ConsultationStatus.CONCLUDED.value,
+            ConsultationSession.kind != ConsultationKind.RECORD_REVIEW.value,
         )
         .limit(1)
     )
@@ -182,6 +185,8 @@ def default_consultation_title(kind: str, grade: int, semester: int) -> str:
         return "3개년 흐름 설계"
     if kind == ConsultationKind.GRADUATE_FIT.value:
         return "목표 학과 지원 전략"
+    if kind == ConsultationKind.RECORD_REVIEW.value:
+        return "생기부 확인"
     return f"{grade}학년 {semester}학기 점검"
 
 

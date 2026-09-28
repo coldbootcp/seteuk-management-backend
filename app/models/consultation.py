@@ -19,6 +19,9 @@ class ConsultationKind(StrEnum):
     INITIAL = "initial"
     SEMESTER_REVIEW = "semester_review"
     GRADUATE_FIT = "graduate_fit"
+    # 설정 탭에서 올린 생기부에 이상·충돌이 있을 때 학생에게 해명을 듣고 반영 방법을 정하는
+    # 상담. 관문(학기 상담 완료 여부)과 무관하다 — 마쳐도 학기 상담을 대신하지 않는다.
+    RECORD_REVIEW = "record_review"
 
 
 class ConsultationStatus(StrEnum):
@@ -86,6 +89,12 @@ class ConsultationSession(Base):
     # 확정된 흐름 안에서 합의한 이번 학기 목표(current_node). 주제는 이 목표에서 나온다.
     semester_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     draft_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # record_review 전용: 확인 중인 생기부 업로드와 학생이 정한 반영 방법
+    # (services/record_review_consultation.RecordDecisions).
+    source_upload_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("seteuk_uploads.id", ondelete="SET NULL"), nullable=True
+    )
+    record_decisions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
