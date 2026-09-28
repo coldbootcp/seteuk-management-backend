@@ -16,6 +16,14 @@ class UploadStatus(StrEnum):
     FAILED = "failed"
 
 
+class UploadMode(StrEnum):
+    # 온보딩의 첫 업로드 — 학생이 검토 화면에서 고른 뒤 반영한다.
+    ONBOARDING = "onboarding"
+    # 설정 탭의 올리기·교체 — 이상·충돌이 없으면 서버가 바로 반영하고, 있으면 멈춰서
+    # 확인을 기다린다(review).
+    REPLACE = "replace"
+
+
 class SeteukUpload(Base):
     __tablename__ = "seteuk_uploads"
 
@@ -46,6 +54,12 @@ class SeteukUpload(Base):
         DateTime(timezone=True), nullable=True
     )
     failure_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=UploadMode.ONBOARDING.value,
+        server_default=UploadMode.ONBOARDING.value,
+    )
+    # 교체 업로드의 대조 결과(schemas.seteuk.RecordReview). 이상·충돌·건너뛴 중복·반영 결과.
+    review: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -2,18 +2,20 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_active_verified_user, get_current_user
 from app.core.rate_limit import enforce_daily_limit
 from app.db.session import get_db
+from app.models.seteuk_upload import SeteukUpload, UploadMode
 from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.seteuk import (
     ImportResultResponse,
     ImportSelectionRequest,
     LatestUploadResponse,
+    RecordReview,
     SeteukAnalysisResult,
     UploadCreateResponse,
     UploadStatusResponse,
@@ -25,17 +27,29 @@ router = APIRouter(
 )
 
 
+def _review_of(upload: SeteukUpload) -> RecordReview | None:
+    return RecordReview.model_validate(upload.review) if upload.review else None
+
+
 @router.post("/uploads", response_model=UploadCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_upload(
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File()],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    mode: Annotated[UploadMode, Form()] = UploadMode.ONBOARDING,
 ) -> UploadCreateResponse:
+    """mode=replace는 설정 탭의 올리기·교체다. 파싱이 끝나면 학생 기록과 대조해, 이상·충돌이
+    없으면 서버가 바로 반영하고 있으면 상태의 review에 남기고 멈춘다."""
     await enforce_daily_limit(db, user.id, UsageAction.SETEUK_UPLOAD)
     file_bytes = await file.read()
     upload = await seteuk_service.create_upload(
-        db, user.id, file_bytes, file_name=file.filename, content_type=file.content_type
+        db,
+        user.id,
+        file_bytes,
+        file_name=file.filename,
+        content_type=file.content_type,
+        mode=mode,
     )
     background_tasks.add_task(seteuk_service.run_parse_job, upload.id, file_bytes)
     return UploadCreateResponse(upload_id=upload.id, status=upload.status)
@@ -63,6 +77,8 @@ async def get_latest_upload(
         imported_at=upload.imported_at,
         failure_reason=upload.failure_reason,
         created_at=upload.created_at,
+        mode=upload.mode,
+        review=_review_of(upload),
     )
 
 
@@ -78,6 +94,8 @@ async def get_upload_status(
         parsing_confidence=upload.parsing_confidence,
         imported_at=upload.imported_at,
         failure_reason=upload.failure_reason,
+        mode=upload.mode,
+        review=_review_of(upload),
     )
 
 

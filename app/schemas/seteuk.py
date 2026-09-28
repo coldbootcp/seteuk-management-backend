@@ -1,10 +1,11 @@
 import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.activity import ActivityCategory, ActivityType
-from app.models.seteuk_upload import UploadStatus
+from app.models.seteuk_upload import UploadMode, UploadStatus
 
 
 class AttendanceItem(BaseModel):
@@ -129,6 +130,61 @@ class SeteukAnalysisResult(BaseModel):
     errors: list[ParseError] = []
 
 
+AnomalyKind = Literal[
+    "name_mismatch",
+    "freshman_year_mismatch",
+    "future_period",
+    "stale_record",
+    "activity_match_unavailable",
+]
+
+
+class RecordAnomaly(BaseModel):
+    """생기부가 이 학생의 지금 상황과 맞지 않아 보이는 점. 서버가 코드로 판정한다 —
+    챗봇이 해명을 요청하는 근거이고, 하나라도 있으면 자동 반영하지 않는다."""
+
+    kind: AnomalyKind
+    message: str
+
+
+class RecordConflict(BaseModel):
+    """생기부 항목과 학생이 직접 입력한 기록이 같은 것을 가리키는데 내용이 다른 경우.
+
+    parsed_index는 반영 단계와 같은 기준(현재 학기 이후를 거른 결과)의 순번이다.
+    """
+
+    id: str
+    section: Literal["academic_performance", "activities"]
+    parsed_index: int
+    existing_id: UUID
+    grade: int
+    semester: int | None = None
+    title: str
+    record_summary: str
+    existing_summary: str
+    differences: list[str] = []
+
+
+class RecordReview(BaseModel):
+    """교체 업로드의 대조 결과.
+
+    - clean_imported: 이상·충돌이 없어 서버가 바로 반영했다.
+    - needs_review: 이상이나 충돌이 있어 반영하지 않고 확인을 기다린다.
+    """
+
+    state: Literal["clean_imported", "needs_review"]
+    anomalies: list[RecordAnomaly] = []
+    conflicts: list[RecordConflict] = []
+    # 영역별로 반영할 순번(중복을 뺀 것). 확인을 마치고 반영할 때 그대로 쓴다.
+    import_plan: dict[str, list[int]] = {}
+    # 학생이 빈칸으로 등록해 둔 수강 과목(성적 없는 행)에 채울 생기부 성적: 기존 행 id → 순번
+    fill_placeholders: dict[str, int] = {}
+    # 학생 기록과 같아 건너뛴 생기부 항목 수(영역별)
+    skipped_duplicates: dict[str, int] = {}
+    # 실제로 반영된 건수(clean_imported일 때)
+    imported: dict[str, int] | None = None
+
+
 class UploadCreateResponse(BaseModel):
     upload_id: UUID
     status: UploadStatus
@@ -143,6 +199,8 @@ class UploadStatusResponse(BaseModel):
     # 없었던 게 실제 버그였다 — 업로드 직후 폴링은 /uploads/latest가 아니라
     # /uploads/{id}를 보는데, 이 값이 없으면 화면이 이유를 보여줄 수 없다.
     failure_reason: str | None = None
+    mode: UploadMode = UploadMode.ONBOARDING
+    review: RecordReview | None = None
 
 
 class LatestUploadResponse(BaseModel):
@@ -160,6 +218,8 @@ class LatestUploadResponse(BaseModel):
     imported_at: datetime.datetime | None = None
     failure_reason: str | None = None
     created_at: datetime.datetime
+    mode: UploadMode = UploadMode.ONBOARDING
+    review: RecordReview | None = None
 
 
 class ImportPeriodOverride(BaseModel):

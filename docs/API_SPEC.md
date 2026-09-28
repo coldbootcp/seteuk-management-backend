@@ -234,9 +234,26 @@ Base URL: `/api/v1`
 grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러진 게 있으면
 `errors`에 `block_id: "future_grade_filter"`로 몇 건이 왜 빠졌는지 남는다.
 
-**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence, imported_at }`
+**교체 업로드 (`mode=replace`, form 필드)** — 설정 탭의 올리기·"최신으로 교체". 온보딩
+(`mode=onboarding`, 기본값)과 같은 파싱을 거치지만 검토 화면이 없다. 파싱이 끝나면 서버가
+학생 기록과 대조해(`services/record_review.py`) 결과를 업로드의 `review`에 남긴다.
+
+- **이상**(`anomalies[].kind`): `name_mismatch`(생기부 성명 ≠ 계정 이름),
+  `freshman_year_mismatch`, `future_period`(현재 학기 또는 입학 연도 기준보다 뒤 시점 기록 —
+  온보딩처럼 반려하지 않고 이상으로 남긴다), `stale_record`(바로 앞 학기보다 더 옛날에서
+  끝나는 문서), `activity_match_unavailable`(활동 대조 LLM 실패).
+- **충돌**(`conflicts[]`): 직접 입력한 기록(`source_upload_id`가 빈 행)과 같은 것을 가리키는데
+  내용이 다른 항목. 성적은 같은 학기·과목의 성취도·원점수·석차를 코드로 비교하고, 활동은
+  LLM이 번호로 짝을 지은 뒤 코드가 검증한다.
+- **중복**은 반영하지 않고 `skipped_duplicates`에 센다. 학생이 성적 없이 등록한 수강 과목
+  행은 생기부 성적으로 채운다(과목 코드 유지).
+- 이상도 충돌도 없으면 바로 반영하고 `review.state = "clean_imported"`, 있으면 반영하지 않고
+  `"needs_review"`. 진단은 다시 만들지 않는다(학생이 `POST /diagnosis`로 요청).
+
+**GET /seteuk/uploads/{upload_id}** → 200 `{ status, parsing_confidence, imported_at, failure_reason, mode, review }`
 `status`: `processing | done | failed`. `done`은 "읽어냈다"는 뜻이고, 실제로
-기록에 들어간 시점은 `imported_at`이 말한다(검토 전이면 null).
+기록에 들어간 시점은 `imported_at`이 말한다(검토 전이면 null). `GET /seteuk/uploads/latest`도
+`mode`·`review`를 함께 돌려준다.
 
 **GET /seteuk/uploads/{upload_id}/result** → 200
 ```json
