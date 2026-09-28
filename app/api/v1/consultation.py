@@ -13,12 +13,14 @@ from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.schemas.chat import MessageRead
 from app.schemas.consultation import (
+    ConfirmFlowRequest,
     ConfirmFullReplanRequest,
     ConsultationMessageCreate,
     ConsultationSessionRead,
     ConsultationStatusResponse,
 )
 from app.services import chat_service, consultation_service
+from app.services.consultation_stage import session_stage
 
 # 관문(require_consultation_satisfied)을 걸지 않는다 — 여기가 관문을 풀기 위한
 # 경로이기 때문이다.
@@ -35,6 +37,10 @@ def _to_read(session: ConsultationSession) -> ConsultationSessionRead:
         status=session.status,
         ready=session.status == ConsultationStatus.READY.value,
         full_replan_confirmed=session.full_replan_confirmed_at is not None,
+        stage=session_stage(session),
+        flow=session.draft_flow,
+        flow_confirmed=session.flow_confirmed_at is not None,
+        semester_goal=session.semester_goal,
     )
 
 
@@ -120,6 +126,19 @@ async def confirm_full_replan(
     session = await consultation_service.confirm_full_replan(
         db, user.id, session_id, data.confirmed
     )
+    return _to_read(session)
+
+
+@router.post("/sessions/{session_id}/confirm-flow", response_model=ConsultationSessionRead)
+async def confirm_flow(
+    session_id: uuid.UUID,
+    data: ConfirmFlowRequest,
+    user: Annotated[User, Depends(get_active_verified_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConsultationSessionRead:
+    """상담 화면의 3개년 흐름 카드에서 학생이 '이 흐름으로 확정'(또는 '다시 조율')을
+    눌렀을 때. 흐름이 확정돼야 챗봇이 이번 학기 목표로 넘어갈 수 있다."""
+    session = await consultation_service.confirm_flow(db, user.id, session_id, data.confirmed)
     return _to_read(session)
 
 

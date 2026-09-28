@@ -33,7 +33,7 @@ class ConsultationStatus(StrEnum):
 class ConsultationSession(Base):
     """진단+상담 관문의 판정 대상이자, 확정 전까지 큰 계획 초안을 담아두는 곳.
     확정(conclude)되기 전까지는 실제 roadmap_nodes/roadmap_plan_events를
-    건드리지 않는다 — 학생이 나가기 버튼을 실제로 눌러야 비로소 반영된다."""
+    건드리지 않는다 — 학생이 "상담 마치고 메인 화면으로" 버튼을 실제로 눌러야 비로소 반영된다."""
 
     __tablename__ = "consultation_sessions"
     __table_args__ = (
@@ -74,6 +74,17 @@ class ConsultationSession(Base):
     full_replan_confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 상담은 "3개년 흐름 → 이번 학기 목표 → 구체 주제" 순서로 좁혀 간다. 앞 단계가
+    # 정해지지 않으면 다음 단계 도구가 거부된다(consultation_tools의 핸들러가 강제).
+    # draft_flow: 현재 학기~3학년 2학기의 큰 흐름 초안(+지나간 학기는 회고 자리).
+    draft_flow: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 학생이 화면의 확정 버튼으로 3개년 흐름에 동의한 시각. 대화 텍스트("좋아요")가
+    # 아니라 confirm-flow 엔드포인트로만 기록된다. 흐름이 바뀌면 다시 None이 된다.
+    flow_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 확정된 흐름 안에서 합의한 이번 학기 목표(current_node). 주제는 이 목표에서 나온다.
+    semester_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     draft_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -101,7 +101,9 @@ def test_filter_removes_premature_draft_confirmation_claim() -> None:
 
     assert "확정해 드리겠습니다" not in result
     assert "저장되었습니다" not in result
-    assert "나가기 버튼" in result
+    # 확정은 버튼으로 한다는 안내는 남되, 화면에 없는 '나가기'가 아니라 실제 버튼 이름으로.
+    assert "나가기 버튼" not in result
+    assert "'상담 마치고 메인 화면으로' 버튼" in result
 
 
 def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
@@ -139,3 +141,54 @@ def test_filter_keeps_a_claim_about_a_real_existing_plan_title() -> None:
     )
 
     assert "반도체 소자 물리 탐구" in result
+
+
+_REMINDER = (
+    "이번 학기 목표를 정리했어요.\n"
+    "그리고 다시 한 번 강조드리면, 이건 아직 초안이에요. 제가 확정하는 게 아니라 "
+    "화면의 나가기 버튼을 눌러야 실제로 확정돼요.\n"
+    "다음으로 주제를 골라 볼까요?"
+)
+
+
+def test_conclude_reminder_is_removed_outside_the_conclude_turn() -> None:
+    result = filter_consultation_output_for_period(
+        _REMINDER, target_grade=1, target_semester=1, allow_conclude_notice=False
+    )
+
+    assert "초안" not in result
+    assert "확정" not in result
+    assert "이번 학기 목표를 정리했어요." in result
+    assert "다음으로 주제를 골라 볼까요?" in result
+
+
+def test_conclude_reminder_stays_on_the_conclude_turn_with_the_real_button_name() -> None:
+    result = filter_consultation_output_for_period(
+        _REMINDER, target_grade=1, target_semester=1, allow_conclude_notice=True
+    )
+
+    assert "나가기" not in result
+    assert "'상담 마치고 메인 화면으로' 버튼" in result
+
+
+def test_flow_card_confirm_guidance_is_not_mistaken_for_the_conclude_reminder() -> None:
+    text = "흐름이 마음에 드시면 카드의 '이 흐름으로 확정' 버튼을 눌러 주세요."
+    result = filter_consultation_output_for_period(
+        text, target_grade=1, target_semester=1, allow_conclude_notice=False
+    )
+
+    assert result == text
+
+
+def test_registered_courses_are_kept_and_others_neutralized() -> None:
+    text = "이번 학기 물리학Ⅰ 수업과 화학Ⅰ을 연결해요."
+    result = filter_consultation_output_for_period(
+        text,
+        target_grade=2,
+        target_semester=1,
+        has_current_course_data=True,
+        current_course_names=["물리학Ⅰ"],
+    )
+
+    assert "물리학Ⅰ" in result
+    assert "화학Ⅰ" not in result

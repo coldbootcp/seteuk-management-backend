@@ -7,12 +7,17 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.records import check_subject_code
 
 
 class TimetableSlotInput(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     course_name: str = Field(min_length=1, max_length=100)
+    # 과목 카탈로그(app/services/subject_catalog.py)의 코드. 후보에서 고른 과목만 채워지고,
+    # 목록에 없어 "기타"로 직접 적은 과목과 예전에 저장된 칸은 비어 있다.
+    subject_code: str | None = Field(default=None, max_length=60)
     teacher: str | None = Field(default=None, max_length=100)
     room: str | None = Field(default=None, max_length=100)
     day: int = Field(ge=0, le=4)
@@ -24,6 +29,8 @@ class TimetableSlotInput(BaseModel):
     # 0은 학생이 아직 단위수를 확인하지 못한 '추후 입력' 상태다.
     units: int = Field(default=0, ge=0, le=10)
     is_career_related: bool = False
+
+    _check_subject_code = field_validator("subject_code")(check_subject_code)
 
 
 class TimetableWrite(BaseModel):

@@ -1,5 +1,5 @@
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,9 +25,20 @@ class ConsultationSessionRead(BaseModel):
     status: str
     ready: bool = False
     full_replan_confirmed: bool = False
+    # 상담 진행 단계 — flow(3개년 흐름) → semester_goal(이번 학기 목표) →
+    # topics(구체 주제) → wrap_up(마무리). 졸업생 상담은 graduate_fit.
+    stage: str = "flow"
+    # 조율 중인 3개년 흐름 초안(없으면 None)과 학생이 확정 버튼을 눌렀는지.
+    flow: dict[str, Any] | None = None
+    flow_confirmed: bool = False
+    semester_goal: dict[str, Any] | None = None
 
 
 class ConfirmFullReplanRequest(BaseModel):
+    confirmed: bool
+
+
+class ConfirmFlowRequest(BaseModel):
     confirmed: bool
 
 

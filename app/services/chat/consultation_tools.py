@@ -16,40 +16,202 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.models.consultation import ConsultationKind, ConsultationSession, ConsultationStatus
 from app.models.user import User
-from app.schemas.consultation import DraftPlan
+from app.schemas.consultation import DraftCurrentNode, DraftPlan, DraftPlanEvent
 from app.services import admission_fit_service
+from app.services.consultation_stage import (
+    NARRATIVE_STAGE_NAMES,
+    STAGE_FLOW,
+    STAGE_SEMESTER_GOAL,
+    STAGE_TOPICS,
+    STAGE_WRAP_UP,
+    needs_flow,
+    period_index,
+    session_stage,
+    validate_flow_nodes,
+)
+from app.services.roadmap_service import get_active_roadmap
 
-_STAGE_NAMES = ["탐색", "기초", "연결", "분화", "독립 탐구", "종합"]
+_STAGE_NAMES = NARRATIVE_STAGE_NAMES
+
+# 지나간 학기 자리 — 흐름 초안에는 모델이 쓰지 않고 서버가 채운다. 확정 시
+# _apply_full_replan이 어차피 회고 마디로 덮어쓰므로 여기서는 형태만 맞춘다.
+_PAST_PLACEHOLDER_TITLE = "지금까지의 기록"
+_PAST_PLACEHOLDER_OBJECTIVE = "실제 학생부 기록으로 확인하는 지나간 학기입니다."
+
+
+def _reset_after_flow_change(session: ConsultationSession) -> None:
+    """흐름이 바뀌면 그 위에 쌓은 학기 목표·주제 초안은 근거를 잃는다."""
+    session.flow_confirmed_at = None
+    session.semester_goal = None
+    _reset_after_goal_change(session)
+
+
+def _reset_after_goal_change(session: ConsultationSession) -> None:
+    session.draft_plan = None
+    if session.status == ConsultationStatus.READY.value:
+        session.status = ConsultationStatus.IN_PROGRESS.value
+        session.ready_at = None
+
+
+async def _propose_three_year_flow(
+    db: AsyncSession, user: User, session: ConsultationSession, args: dict[str, Any]
+) -> dict[str, Any]:
+    if not needs_flow(session.kind, session.full_replan_confirmed_at is not None):
+        return {
+            "error": (
+                "이 상담은 기존 3개년 흐름을 유지한 채 이번 학기를 점검하는 상담입니다. "
+                "흐름 자체를 다시 세워야 하면 propose_full_replan_exception으로 먼저 "
+                "제안하고 학생이 확인 버튼을 누른 뒤에 시도하세요."
+            )
+        }
+
+    nodes, error = validate_flow_nodes(
+        args.get("nodes"), session.target_grade, session.target_semester
+    )
+    if error:
+        return {"error": error}
+    assert nodes is not None
+
+    flow = {
+        "career_track": str(args.get("career_track") or "").strip(),
+        "destination": str(args.get("destination") or "").strip(),
+        "focus": str(args.get("focus") or "").strip(),
+        "so_far": str(args.get("so_far") or "").strip(),
+        "nodes": nodes,
+    }
+    if session.draft_flow != flow:
+        session.draft_flow = flow
+        _reset_after_flow_change(session)
+    await db.commit()
+    return {
+        "stored": True,
+        "confirmed": session.flow_confirmed_at is not None,
+        "semesters": [f"{n['grade']}학년 {n['semester']}학기" for n in nodes],
+        "next": (
+            "학생에게 흐름을 짧게 보여주고 반응을 받으세요. 학생이 동의하면 화면의 "
+            "'이 흐름으로 확정' 버튼을 눌러 달라고 안내하세요. 버튼을 누르기 전에는 "
+            "이번 학기 목표로 넘어갈 수 없습니다."
+        ),
+    }
+
+
+def _current_flow_node(session: ConsultationSession) -> dict[str, Any] | None:
+    flow = session.draft_flow or {}
+    for node in flow.get("nodes", []):
+        if (node.get("grade"), node.get("semester")) == (
+            session.target_grade,
+            session.target_semester,
+        ):
+            return node
+    return None
+
+
+async def _set_semester_goal(
+    db: AsyncSession, user: User, session: ConsultationSession, args: dict[str, Any]
+) -> dict[str, Any]:
+    if session_stage(session) == STAGE_FLOW:
+        return {
+            "error": (
+                "3개년 흐름이 아직 확정되지 않았습니다. 흐름을 먼저 학생과 조율하고, "
+                "학생이 화면의 확정 버튼을 누른 뒤에 이번 학기 목표를 정하세요."
+            )
+        }
+    try:
+        goal = DraftCurrentNode.model_validate(args)
+    except ValidationError as exc:
+        return {"error": f"목표 형식이 올바르지 않습니다: {exc.errors()[0]['msg']}"}
+    if not goal.title.strip() or not goal.objective.strip():
+        return {"error": "title과 objective를 모두 채워주세요"}
+
+    stored = goal.model_dump(mode="json")
+    if session.semester_goal != stored:
+        session.semester_goal = stored
+        _reset_after_goal_change(session)
+    await db.commit()
+    return {
+        "stored": True,
+        "title": goal.title,
+        "next": "이 목표에서 출발해 구체 탐구 주제를 학생과 2~3개씩 좁혀 가세요.",
+    }
+
+
+async def _existing_career_track(db: AsyncSession, user: User) -> str:
+    roadmap = await get_active_roadmap(db, user.id)
+    return roadmap.career_track if roadmap else ""
+
+
+def _flow_nodes_for_all_semesters(session: ConsultationSession) -> list[dict[str, Any]]:
+    """확정 저장에 쓰는 6개 마디 — 지나간 학기는 서버가 회고 자리로 채운다."""
+    flow_nodes = {
+        (n["grade"], n["semester"]): n for n in (session.draft_flow or {}).get("nodes", [])
+    }
+    current = period_index(session.target_grade, session.target_semester)
+    nodes: list[dict[str, Any]] = []
+    for index in range(6):
+        grade, semester = index // 2 + 1, index % 2 + 1
+        if index < current or (grade, semester) not in flow_nodes:
+            nodes.append(
+                {
+                    "grade": grade,
+                    "semester": semester,
+                    "narrative_stage": _STAGE_NAMES[index],
+                    "title": _PAST_PLACEHOLDER_TITLE,
+                    "objective": _PAST_PLACEHOLDER_OBJECTIVE,
+                    "candidate_subjects": [],
+                    "competency_goals": [],
+                }
+            )
+        else:
+            nodes.append(flow_nodes[(grade, semester)])
+    return nodes
 
 
 async def _propose_draft_plan(
     db: AsyncSession, user: User, session: ConsultationSession, args: dict[str, Any]
 ) -> dict[str, Any]:
-    mode = args.get("mode")
-    if (
-        mode == "full_replan"
-        and session.kind == ConsultationKind.SEMESTER_REVIEW.value
-        and session.full_replan_confirmed_at is None
-    ):
+    stage = session_stage(session)
+    if stage == STAGE_FLOW:
         return {
             "error": (
-                "학생의 명시적 확인 없이는 전체 계획을 다시 세울 수 없습니다. "
-                "propose_full_replan_exception으로 먼저 제안하고 학생이 확인 버튼을 "
-                "누른 뒤에 다시 시도하세요."
+                "3개년 흐름이 아직 확정되지 않았습니다. 흐름 → 이번 학기 목표 → 주제 "
+                "순서로 진행하세요. 지금은 propose_three_year_flow로 흐름을 제안할 차례입니다."
+            )
+        }
+    if session.semester_goal is None:
+        return {
+            "error": (
+                "이번 학기 목표가 아직 정해지지 않았습니다. 학생과 목표를 합의한 뒤 "
+                "set_semester_goal을 먼저 호출하세요."
             )
         }
 
+    events_raw = args.get("plan_events")
     try:
-        draft = DraftPlan.model_validate(args)
+        events = [DraftPlanEvent.model_validate(e) for e in (events_raw or [])]
     except ValidationError as exc:
-        return {"error": f"제안 형식이 올바르지 않습니다: {exc.errors()[0]['msg']}"}
-
-    if len(draft.plan_events) != 10:
+        return {"error": f"주제 형식이 올바르지 않습니다: {exc.errors()[0]['msg']}"}
+    if len(events) != 10:
         return {"error": "plan_events는 정확히 10개여야 합니다(core 4개 + optional 6개 권장)"}
-    if draft.mode == "full_replan" and len(draft.nodes) != 6:
-        return {
-            "error": "mode가 full_replan이면 nodes는 정확히 6개(1학년 1학기~3학년 2학기)여야 합니다"
-        }
+
+    goal = DraftCurrentNode.model_validate(session.semester_goal)
+    if needs_flow(session.kind, session.full_replan_confirmed_at is not None):
+        flow = session.draft_flow or {}
+        draft = DraftPlan(
+            mode="full_replan",
+            career_track=flow.get("career_track", ""),
+            focus=flow.get("focus", ""),
+            nodes=_flow_nodes_for_all_semesters(session),
+            current_node=goal,
+            plan_events=events,
+        )
+    else:
+        career_track = await _existing_career_track(db, user)
+        draft = DraftPlan(
+            mode="current_node_only",
+            career_track=career_track,
+            current_node=goal,
+            plan_events=events,
+        )
 
     session.draft_plan = draft.model_dump(mode="json")
     await db.commit()
@@ -78,8 +240,13 @@ async def _propose_full_replan_exception(
 async def _signal_ready_to_conclude(
     db: AsyncSession, user: User, session: ConsultationSession, args: dict[str, Any]
 ) -> dict[str, Any]:
-    if session.draft_plan is None:
-        return {"error": "아직 제안된 계획이 없습니다 — propose_draft_plan을 먼저 호출하세요"}
+    if session.draft_plan is None or session_stage(session) != STAGE_WRAP_UP:
+        return {
+            "error": (
+                "아직 정리된 주제 초안이 없습니다 — 흐름 → 이번 학기 목표 → "
+                "propose_draft_plan 순서를 먼저 마치세요."
+            )
+        }
     session.status = ConsultationStatus.READY.value
     session.ready_at = datetime.now(UTC)
     await db.commit()
@@ -97,14 +264,14 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
     }
 
 
-_NODE_SCHEMA = {
+_FLOW_NODE_SCHEMA = {
     "type": "object",
     "properties": {
         "grade": {"type": "integer"},
         "semester": {"type": "integer"},
         "narrative_stage": {"type": "string", "enum": _STAGE_NAMES},
-        "title": {"type": "string"},
-        "objective": {"type": "string"},
+        "title": {"type": "string", "description": "그 학기의 큰 방향을 한 줄로"},
+        "objective": {"type": "string", "description": "그 학기에 무엇을 향해 가는지 1~2문장"},
         "candidate_subjects": {"type": "array", "items": {"type": "string"}},
         "competency_goals": {"type": "array", "items": {"type": "string"}},
     },
@@ -127,52 +294,110 @@ _PLAN_EVENT_SCHEMA = {
 
 TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
-        "propose_draft_plan",
-        "지금까지 대화로 정한 계획을 초안으로 저장한다(아직 확정 아님). 최초 상담이나 "
-        "재평가의 전체 재설계에서는 mode=full_replan과 nodes(정확히 6개, 1학년 1학기~"
-        "3학년 2학기 순서)를 채운다. 재평가의 기본 경로에서는 mode=current_node_only로 "
-        "nodes를 비운다. current_node(이번 학기 목표)와 plan_events(이번 학기에 바로 "
-        "실행할 탐구 주제 10개, core 4 + optional 6)는 매번 채운다. 학생이 반려하면 "
-        "다시 호출해 덮어써라.",
+        "propose_three_year_flow",
+        "[1단계] 학생과 합의한 도착점(destination)과, 거기로 가는 3개년 큰 흐름을 초안으로 "
+        "저장한다. nodes에는 **현재 학기부터 3학년 2학기까지** 남은 학기를 하나씩 순서대로, "
+        "모두 같은 무게로 한 줄씩 채운다(지나간 학기는 넣지 않는다 — 서버가 회고 자리로 "
+        "채운다. 이번 학기라고 과목·활동·주제를 붙이지 않는다). 저장하면 화면에 흐름 카드가 뜨고, "
+        "학생이 카드의 확정 버튼을 눌러야 다음 단계로 넘어간다. 학생이 흐름을 고치자고 "
+        "하면 반영해서 다시 호출하라(다시 호출하면 확정이 풀린다).",
         {
-            "mode": {"type": "string", "enum": ["full_replan", "current_node_only"]},
-            "career_track": {"type": "string"},
-            "focus": {"type": "string"},
-            "nodes": {"type": "array", "items": _NODE_SCHEMA},
-            "current_node": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "objective": {"type": "string"},
-                    "candidate_subjects": {"type": "array", "items": {"type": "string"}},
-                    "competency_goals": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["title", "objective"],
+            "career_track": {"type": "string", "description": "흐름이 향하는 진로 축"},
+            "destination": {
+                "type": "string",
+                "description": (
+                    "학생과 합의한 도착점 — 3학년을 마칠 때 입시에서 이 학생이 어떤 "
+                    "학생으로 읽히면 좋을지 한 문장"
+                ),
             },
-            "plan_events": {"type": "array", "items": _PLAN_EVENT_SCHEMA},
+            "focus": {"type": "string", "description": "3년을 관통하는 핵심 관심 한 줄"},
+            "so_far": {
+                "type": "string",
+                "description": (
+                    "지나간 학기의 실제 기록에서 읽은 출발점 1~2문장. 기록이 없거나 "
+                    "학생부가 반영되지 않았으면 빈 문자열."
+                ),
+            },
+            "nodes": {"type": "array", "items": _FLOW_NODE_SCHEMA},
         },
-        ["mode", "current_node", "plan_events"],
+        ["career_track", "destination", "focus", "nodes"],
+    ),
+    _tool(
+        "set_semester_goal",
+        "[2단계] 확정된 3개년 흐름 안에서 학생과 합의한 **이번 학기 목표**를 저장한다. "
+        "흐름이 확정되기 전에는 거부된다. 목표가 바뀌면 다시 호출하라(이미 정리한 주제 "
+        "초안은 새 목표에 맞춰 다시 만들어야 한다).",
+        {
+            "title": {"type": "string"},
+            "objective": {"type": "string"},
+            "candidate_subjects": {"type": "array", "items": {"type": "string"}},
+            "competency_goals": {"type": "array", "items": {"type": "string"}},
+        },
+        ["title", "objective"],
+    ),
+    _tool(
+        "propose_draft_plan",
+        "[3단계] 이번 학기 목표에서 나온 구체 탐구 주제를 초안으로 저장한다(아직 확정 "
+        "아님). 이번 학기 목표가 저장된 뒤에만 쓸 수 있다. plan_events는 정확히 10개"
+        "(core 4 + optional 6)이며, 대화에서 학생과 함께 고른 주제를 core 앞쪽에 둔다. "
+        "3개년 흐름과 이번 학기 목표는 이미 저장된 것을 서버가 그대로 쓴다. 학생이 "
+        "반려하면 다시 호출해 덮어써라.",
+        {"plan_events": {"type": "array", "items": _PLAN_EVENT_SCHEMA}},
+        ["plan_events"],
     ),
     _tool(
         "propose_full_replan_exception",
         "재평가 상담에서만 쓴다. 학생의 상황(진로 전환 등)이 기존 3개년 큰 계획의 "
         "전제 자체를 무너뜨렸다고 판단될 때만, 처음부터 다시 세우자고 제안한다. "
         "이 호출만으로는 아무것도 바뀌지 않는다 — 학생이 화면의 별도 확인 버튼을 "
-        "눌러야 실제로 전체 재설계가 허용된다.",
+        "눌러야 실제로 전체 재설계가 허용되고, 그 뒤 3개년 흐름부터 다시 조율한다.",
         {"rationale": {"type": "string", "description": "왜 전체를 다시 세워야 하는지"}},
         ["rationale"],
     ),
     _tool(
         "signal_ready_to_conclude",
-        "상담이 충분히 마무리됐다고 판단되면 호출한다. propose_draft_plan으로 계획을 "
-        "저장한 뒤에만 호출할 수 있다. 이후 학생이 화면의 나가기 버튼을 눌러야 실제로 "
-        "확정된다 — 대화가 이어지면 이 신호는 취소되니, 정말 끝났을 때만 불러라.",
-        {"summary": {"type": "string", "description": "무엇을 확정했는지 한두 문장 요약"}},
+        "[4단계] 상담이 충분히 마무리됐다고 판단되면 호출한다. propose_draft_plan으로 "
+        "주제 초안을 저장한 뒤, 학생이 정리한 내용에 동의했을 때만 호출한다. 이후 학생이 "
+        "화면의 '상담 마치고 메인 화면으로' 버튼을 눌러야 실제로 확정된다 — 대화가 "
+        "이어지면 이 신호는 취소되니, 정말 끝났을 때만 불러라.",
+        {"summary": {"type": "string", "description": "무엇을 정했는지 한두 문장 요약"}},
         ["summary"],
     ),
 ]
 
+def tools_for_stage(session: ConsultationSession) -> list[dict[str, Any]]:
+    """이번 턴에 챗봇에게 보여 줄 도구 — 지금 단계와 그 앞 단계를 고치는 도구만.
+
+    모든 도구를 늘 보여 주면 흐름 단계에서도 모델이 "이번 학기 주제 10개 저장" 도구
+    설명을 매 턴 읽고, 그쪽으로 대화를 끌고 가는 것이 실제로 관측됐다. 핸들러가 순서를
+    어긴 호출을 거부하긴 하지만, 애초에 다음 단계 수단을 보여 주지 않는 편이 대화
+    자체가 순서를 지키게 만든다. 도구 목록은 턴마다 한 번 정한다 — 한 턴 안에서 목표를
+    저장하자마자 주제까지 저장하거나, 주제를 저장하자마자 마무리 신호를 보내 학생의
+    반응을 건너뛰는 것을 막기 위해서다.
+    """
+    stage = session_stage(session)
+    if stage == STAGE_FLOW:
+        names = ["propose_three_year_flow"]
+    elif stage == STAGE_SEMESTER_GOAL:
+        names = ["set_semester_goal"]
+    elif stage == STAGE_TOPICS:
+        names = ["propose_draft_plan", "set_semester_goal"]
+    else:  # wrap_up
+        names = ["signal_ready_to_conclude", "propose_draft_plan", "set_semester_goal"]
+
+    flow_needed = needs_flow(session.kind, session.full_replan_confirmed_at is not None)
+    if stage != STAGE_FLOW and flow_needed:
+        # 흐름을 확정한 뒤에도 학생이 흐름을 고치고 싶어 하면 다시 제안할 수 있다(확정이 풀림).
+        names.append("propose_three_year_flow")
+    if session.kind == ConsultationKind.SEMESTER_REVIEW.value and not flow_needed:
+        names.append("propose_full_replan_exception")
+    by_name = {spec["function"]["name"]: spec for spec in TOOL_SPECS}
+    return [by_name[name] for name in names]
+
+
 TOOL_HANDLERS = {
+    "propose_three_year_flow": _propose_three_year_flow,
+    "set_semester_goal": _set_semester_goal,
     "propose_draft_plan": _propose_draft_plan,
     "propose_full_replan_exception": _propose_full_replan_exception,
     "signal_ready_to_conclude": _signal_ready_to_conclude,

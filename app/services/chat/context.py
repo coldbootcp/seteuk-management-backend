@@ -23,11 +23,14 @@ from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemStatus
 from app.models.reading_activity import ReadingActivity
 from app.models.seteuk_upload import SeteukUpload, UploadStatus
+from app.models.timetable import Timetable
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.services.academic_timing import get_academic_timing
 from app.services.diagnosis.data import has_diagnosis_evidence
 from app.services.student_interest_service import get_current_interests
+from app.services.subject_catalog import get_subject
+from app.services.subject_contents import get_content
 
 MAX_ACTIVITIES = 80
 MAX_READINGS = 40
@@ -71,6 +74,24 @@ def _truncate(text: str | None, limit: int = DESCRIPTION_LIMIT) -> str | None:
     if text is None or len(text) <= limit:
         return text
     return text[:limit] + "…"
+
+
+def _course_entry(subject: str, category: str | None, subject_code: str | None) -> dict[str, Any]:
+    """이번 학기 수강 과목 한 줄. 카탈로그 과목이면 교육과정과 공식 단원 요약을 붙여,
+    챗봇이 과목 이름만 보고 내용을 짐작하지 않게 한다."""
+    entry: dict[str, Any] = {
+        "subject": subject,
+        "category": category,
+        "from_catalog": subject_code is not None,
+    }
+    catalog_subject = get_subject(subject_code)
+    if catalog_subject is not None:
+        entry["curriculum"] = f"{catalog_subject.curriculum} 개정"
+        entry["course_type"] = catalog_subject.category
+    content = get_content(subject_code)
+    if content is not None:
+        entry["content"] = {"summary": content.summary, "units": list(content.units)}
+    return entry
 
 
 async def _count(db: AsyncSession, model: Any, user_id: uuid.UUID) -> int:
@@ -168,6 +189,48 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .limit(MAX_GRADES)
         )
     )
+    # 이번 학기 수강 과목은 성적 상한과 무관하게 전부 싣는다 — 상담이 이번 학기 목표와
+    # 주제를 과목에 연결하는 근거라서, 잘리면 "그 과목은 안 듣는다"고 오해할 수 있다.
+    current_courses: list[AcademicPerformance] = []
+    if user.current_grade is not None and user.current_semester is not None:
+        current_courses = list(
+            await db.scalars(
+                select(AcademicPerformance)
+                .where(
+                    AcademicPerformance.user_id == user.id,
+                    AcademicPerformance.grade == user.current_grade,
+                    AcademicPerformance.semester == user.current_semester,
+                )
+                .order_by(AcademicPerformance.created_at.asc())
+            )
+        )
+    # 시간표에만 넣은 과목도 이번 학기 수강 과목이다 — 수강 과목 화면과 시간표 중 어느
+    # 쪽으로 등록했든 상담이 같은 목록을 보게 합친다(과목명이 같으면 한 번만).
+    current_course_entries: list[dict[str, Any]] = [
+        _course_entry(c.subject, c.category, c.subject_code) for c in current_courses
+    ]
+    if user.current_grade is not None and user.current_semester is not None:
+        timetables = list(
+            await db.scalars(
+                select(Timetable)
+                .where(
+                    Timetable.user_id == user.id,
+                    Timetable.grade == user.current_grade,
+                    Timetable.semester == user.current_semester,
+                )
+                .order_by(Timetable.is_default.desc(), Timetable.updated_at.desc())
+            )
+        )
+        known = {entry["subject"].strip() for entry in current_course_entries}
+        for timetable in timetables[:1]:
+            for slot in timetable.slots or []:
+                name = str(slot.get("course_name") or "").strip()
+                if not name or name in known:
+                    continue
+                known.add(name)
+                current_course_entries.append(
+                    _course_entry(name, slot.get("group") or "기타", slot.get("subject_code"))
+                )
     # 상한에 걸릴 때 어떤 행이 남는지가 정렬에 달려 있다. ORDER BY가 없으면 DB가
     # 임의로 고른 30건이 실려, 같은 질문에 매번 다른 근거를 드는 챗봇이 된다.
     # 다른 영역과 마찬가지로 최신 것부터 남긴다.
@@ -286,6 +349,9 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             }
             for a in activities
         ],
+        # 학생이 등록한 이번 학기 수강 과목(온보딩·상담 화면 + 기본 시간표). 비어 있으면
+        # 아직 등록하지 않은 것이지 듣는 과목이 없다는 뜻이 아니다.
+        "current_semester_courses": current_course_entries,
         "academic_performance": [
             {
                 "grade": g.grade,
