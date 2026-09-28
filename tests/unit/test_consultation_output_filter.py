@@ -1,4 +1,8 @@
-from app.services.chat_service import filter_consultation_output_for_period
+from app.services.chat_service import (
+    _drop_dangling_fragment,
+    _drop_repeated_exit_notice,
+    filter_consultation_output_for_period,
+)
 
 
 def test_filter_removes_past_semester_plans_for_second_year_student() -> None:
@@ -75,7 +79,7 @@ def test_filter_does_not_assume_a_specific_current_course() -> None:
     )
 
     assert "물리Ⅱ" not in result
-    assert "실제 수강 중인 관련 과목" in result
+    assert "관련 교과" in result
 
 
 def test_filter_hides_internal_draft_retry_and_preserves_draft_status() -> None:
@@ -106,7 +110,28 @@ def test_filter_removes_premature_draft_confirmation_claim() -> None:
     assert "'상담 마치고 메인 화면으로' 버튼" in result
 
 
-def test_filter_does_not_claim_missing_activities_without_school_record() -> None:
+def test_filter_does_not_claim_missing_activities_while_school_record_pending() -> None:
+    """학생부 PDF는 있지만 처리가 아직 안 끝난 상태(processing/failed/
+    awaiting_import)에서는 "아직 반영되지 않았다"는 안내문을 붙인다 — 실제로
+    처리 중인 일이라 정확한 표현이다."""
+    result = filter_consultation_output_for_period(
+        "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
+        "현재 학기에는 소자 물리 주제를 우선 검토해 보세요.",
+        target_grade=2,
+        target_semester=2,
+        school_record_status="processing",
+    )
+
+    assert "전혀 기록되지" not in result
+    assert "확인할 수 없습니다" in result
+    assert "현재 학기" in result
+
+
+def test_filter_does_not_repeat_reflection_notice_when_never_uploaded() -> None:
+    """생기부를 애초에 올린 적 없는 학생(not_uploaded)에게는 "아직 반영되지
+    않았다"는 문구를 매 턴 반복해서 붙이지 않는다 — 처리 중인 일이 아니므로
+    부정확하고, 반복되면 불필요하게 거슬린다는 사용자 피드백에 따른 것이다.
+    과대 단정 문장 자체는 여전히 지운다."""
     result = filter_consultation_output_for_period(
         "고1 2학기까지 반도체 공정·소자 물리 관련 심화 학습 활동이 전혀 기록되지 않았습니다.\n"
         "현재 학기에는 소자 물리 주제를 우선 검토해 보세요.",
@@ -116,7 +141,7 @@ def test_filter_does_not_claim_missing_activities_without_school_record() -> Non
     )
 
     assert "전혀 기록되지" not in result
-    assert "확인할 수 없습니다" in result
+    assert "반영되지" not in result
     assert "현재 학기" in result
 
 
@@ -192,3 +217,110 @@ def test_registered_courses_are_kept_and_others_neutralized() -> None:
 
     assert "물리학Ⅰ" in result
     assert "화학Ⅰ" not in result
+
+
+def test_filter_drops_indented_body_of_a_removed_past_semester_item() -> None:
+    result = filter_consultation_output_for_period(
+        """**[3개년 학술 로드맵 큰 그림]**
+
+- **1학년 1학기 — 도체와 반도체의 차이 규명 (통합과학)**
+  원자 구조 관점에서 전기가 통하는 조건을 묻는 단계예요.
+
+- **2학년 1학기(지금) — 논리 게이트와 불 대수**
+  트랜지스터로 게이트를 구성합니다.""",
+        target_grade=2,
+        target_semester=1,
+    )
+
+    assert "1학년" not in result
+    assert "원자 구조" not in result
+    assert "2학년 1학기(지금)" in result
+    assert "트랜지스터로 게이트를 구성합니다." in result
+
+
+def test_filter_keeps_future_semester_courses_and_collapses_placeholders() -> None:
+    result = filter_consultation_output_for_period(
+        """- **2학년 1학기 — 논리 게이트 (물리학Ⅰ·정보2)**
+- **2학년 1학기 — 함수 해석 (수학Ⅰ·Ⅱ)**
+- **2학년 2학기 — MOSFET 모델링 (물리학Ⅱ·미적분)**""",
+        target_grade=2,
+        target_semester=1,
+        has_current_course_data=False,
+    )
+
+    assert "물리학Ⅰ" not in result
+    assert "(관련 교과)" in result
+    assert "관련 교과·관련 교과" not in result
+    assert "물리학Ⅱ·미적분" in result
+    assert "·Ⅱ" not in result.replace("물리학Ⅱ·미적분", "")
+
+
+def test_dangling_fragment_before_a_tool_call_is_dropped() -> None:
+    text = "네, 좋아요. 초안은 나가기 버튼을 눌러야 확정돼요.\n\n그럼"
+    assert _drop_dangling_fragment(text) == "네, 좋아요. 초안은 나가기 버튼을 눌러야 확정돼요.\n"
+
+
+def test_finished_sentence_before_a_tool_call_is_kept() -> None:
+    text = "초안을 정리할게요."
+    assert _drop_dangling_fragment(text) == text
+
+
+def test_short_period_notation_is_read_as_a_semester() -> None:
+    result = filter_consultation_output_for_period(
+        """- 1-1: 전하·전류 기초 원리 (통합과학)
+- **2-1(이번 학기): 도핑 효과 규명** (물리학Ⅰ)
+- 2-2: pn 접합 다이오드 모델링 (물리학Ⅱ, 미적분)
+- 주제는 1-2개만 골라도 괜찮아요.""",
+        target_grade=2,
+        target_semester=1,
+        has_current_course_data=False,
+    )
+
+    assert "1-1" not in result
+    assert "2-1(이번 학기): 도핑 효과 규명** (관련 교과)" in result
+    assert "(물리학Ⅱ, 미적분)" in result
+    assert "1-2개만" in result
+
+
+def test_exit_notice_is_kept_once_per_turn() -> None:
+    text = "요약입니다.\n실제 확정은 화면의 나가기 버튼을 눌러야 해요. 지금 누르시면 돼요."
+    assert _drop_repeated_exit_notice(text, already_given=False) == text
+    assert _drop_repeated_exit_notice(text, already_given=True) == "요약입니다."
+
+
+def test_exit_notice_repeated_within_one_paragraph_is_kept_once() -> None:
+    text = (
+        "초안이에요. 나가기 버튼을 눌러야 저장돼요. 다음에 또 봐요. "
+        "준비되면 나가기 버튼을 눌러주세요!"
+    )
+    assert _drop_repeated_exit_notice(text, already_given=False) == (
+        "초안이에요. 나가기 버튼을 눌러야 저장돼요. 다음에 또 봐요."
+    )
+
+
+def test_a_current_line_that_cites_a_past_semester_as_its_source_is_kept() -> None:
+    result = filter_consultation_output_for_period(
+        """- **1학년 (개념 탐색)**: 반도체 기초 원리를 규명합니다.
+- **2학년 (교과 융합)**: 1학년에서 다룬 에너지 밴드를 pn 접합 모델링으로 확장합니다.
+1. **다이오드 I-V 특성 해석** — 1학년 통합과학에서 배운 전류 개념을 이어받습니다.""",
+        target_grade=2,
+        target_semester=1,
+    )
+
+    assert "개념 탐색" not in result
+    assert "2학년 (교과 융합)" in result
+    assert "다이오드 I-V 특성 해석" in result
+
+
+def test_bracketed_period_and_doubled_subject_word() -> None:
+    result = filter_consultation_output_for_period(
+        """- **[2-2] MOS 모델링** (물리학Ⅱ·미적분)
+2. **물리학Ⅰ 교과 개념을 소자 모델링에 적용**""",
+        target_grade=2,
+        target_semester=1,
+        has_current_course_data=False,
+    )
+
+    assert "(물리학Ⅱ·미적분)" in result
+    assert "관련 교과 개념을 소자 모델링에 적용" in result
+    assert "관련 교과 교과" not in result

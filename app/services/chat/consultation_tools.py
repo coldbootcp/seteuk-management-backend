@@ -270,8 +270,17 @@ _FLOW_NODE_SCHEMA = {
         "grade": {"type": "integer"},
         "semester": {"type": "integer"},
         "narrative_stage": {"type": "string", "enum": _STAGE_NAMES},
-        "title": {"type": "string", "description": "그 학기의 큰 방향을 한 줄로"},
-        "objective": {"type": "string", "description": "그 학기에 무엇을 향해 가는지 1~2문장"},
+        "title": {
+            "type": "string",
+            "description": (
+                "그 학기의 큰 방향을 한 줄로 — 추상적 수식어('기초 탐색', '역량 강화') 대신 "
+                "10~30자 내외의 구체적 학술 테마(예: '불 대수 기반 디지털 논리 회로의 연산 원리')"
+            ),
+        },
+        "objective": {
+            "type": "string",
+            "description": "그 학기에 무엇을 향해 가는지 1~2문장(구체적 개념·원리로)",
+        },
         "candidate_subjects": {"type": "array", "items": {"type": "string"}},
         "competency_goals": {"type": "array", "items": {"type": "string"}},
     },

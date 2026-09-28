@@ -37,3 +37,18 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         logger.info("request", status_code=response.status_code, duration_ms=duration_ms)
         response.headers[REQUEST_ID_HEADER] = request_id
         return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """브라우저가 지키는 방어 계층을 켠다. 이 API는 HTML을 내지 않는 순수 JSON
+    응답이라 CSP는 아무것도 허용하지 않는 것으로 충분하다."""
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response

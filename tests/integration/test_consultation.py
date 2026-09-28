@@ -226,6 +226,72 @@ async def test_gate_blocks_new_user_until_initial_consultation(
     assert body["required_kind"] == "initial"
 
 
+async def test_opening_turn_is_model_generated_and_persisted(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """학생이 아무 말도 하기 전, 화면이 고정 문구 대신 모델이 직접 지은 여는 말을
+    보여준다는 계약 — 스트리밍으로 나가고, 대화 기록에도 assistant 메시지로 남는다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+    session = (
+        await client.post("/api/v1/consultation/sessions", headers=auth_headers)
+    ).json()
+
+    before = await client.get(
+        f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+    )
+    assert before.json() == []
+
+    _install_stream(monkeypatch, [[_chunk("안녕하세요! 요즘 관심 있는 분야가 있나요?")]])
+
+    response = await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+    events = _parse_sse(response.text)
+    token = next(p for e, p in events if e == "token")
+    assert "안녕하세요" in token["delta"]
+    done = next(p for e, p in events if e == "done")
+    assert done["message_id"] is not None
+
+    after = await client.get(
+        f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+    )
+    messages = after.json()
+    assert len(messages) == 1
+    assert messages[0]["role"] == "assistant"
+    assert "안녕하세요" in messages[0]["content"]
+
+
+async def test_opening_turn_is_skipped_once_conversation_has_started(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """이미 메시지가 있는 세션(재개하는 상담)에서는 여는 말을 다시 짓지 않는다 —
+    화면이 잘못 두 번 부르더라도 서버가 오류 없이 조용히 넘긴다."""
+    await _onboard(client, auth_headers, grade=1, semester=1)
+    session = (
+        await client.post("/api/v1/consultation/sessions", headers=auth_headers)
+    ).json()
+
+    _install_stream(monkeypatch, [[_chunk("안녕하세요!")]])
+    await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+
+    second = await client.post(
+        f"/api/v1/consultation/sessions/{session['id']}/opening", headers=auth_headers
+    )
+    events = _parse_sse(second.text)
+    assert not any(e == "error" for e, _ in events)
+    done = next(p for e, p in events if e == "done")
+    assert done["message_id"] is None
+
+    messages = (
+        await client.get(
+            f"/api/v1/consultation/sessions/{session['id']}/messages", headers=auth_headers
+        )
+    ).json()
+    assert len(messages) == 1
+
+
 async def test_initial_consultation_walks_flow_goal_topics_then_concludes(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -467,3 +533,22 @@ async def test_semester_review_conversation_gets_period_title(
             c.purpose: c.title for c in (await db.scalars(select(Conversation))).all()
         }
     assert titles["semester_review_consultation"] == "1학년 2학기 점검"
+
+
+def test_initial_consultation_prompt_and_flow_nodes_ask_for_concrete_themes() -> None:
+    """3개년 흐름과 주제가 "기초 탐색" 같은 알맹이 없는 수식어로 채워지지 않게, 프롬프트
+    규칙과 흐름 마디 명세가 구체적 학술 테마를 요구하는지 확인한다."""
+    from app.services.chat.consultation_prompts import build_consultation_system_prompt
+    from app.services.chat.consultation_tools import TOOL_SPECS
+
+    prompt = build_consultation_system_prompt("initial", "{}", None)
+    assert "추상적 수식어" in prompt
+    assert "인과 사슬" in prompt
+
+    flow_tool = next(
+        t for t in TOOL_SPECS if t["function"]["name"] == "propose_three_year_flow"
+    )
+    node_props = flow_tool["function"]["parameters"]["properties"]["nodes"]["items"][
+        "properties"
+    ]
+    assert "구체적 학술 테마" in node_props["title"]["description"]

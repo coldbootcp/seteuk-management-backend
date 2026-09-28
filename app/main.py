@@ -13,13 +13,18 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging
-from app.core.middleware import RequestContextMiddleware
+from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.db.session import AsyncSessionLocal
 from app.services.maintenance_service import fail_stale_jobs, purge_stale_withdrawals
 
 settings = get_settings()
 configure_logging()
 logger = structlog.get_logger()
+
+# rate_limit.py의 "한도를 적용하는 환경"과 같은 기준. 대화형 문서는 전체 API
+# 표면(엔드포인트·스키마)을 그대로 드러내므로 운영에서는 끈다.
+_HARDENED_ENVIRONMENTS = {"production", "prod", "staging"}
+_is_hardened_environment = settings.environment.lower() in _HARDENED_ENVIRONMENTS
 
 if settings.sentry_dsn:
     import sentry_sdk
@@ -40,8 +45,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="세특연구소 API", lifespan=lifespan)
+app = FastAPI(
+    title="세특연구소 API",
+    lifespan=lifespan,
+    docs_url=None if _is_hardened_environment else "/docs",
+    redoc_url=None if _is_hardened_environment else "/redoc",
+    openapi_url=None if _is_hardened_environment else "/openapi.json",
+)
 app.add_middleware(RequestContextMiddleware)
+if _is_hardened_environment:
+    app.add_middleware(SecurityHeadersMiddleware)
 # 웹 프론트엔드는 API와 다른 오리진에서 돈다. 인증은 Authorization 헤더로만
 # 하므로 쿠키(allow_credentials)는 필요 없고, 허용 오리진도 설정으로 좁혀 둔다.
 app.add_middleware(
