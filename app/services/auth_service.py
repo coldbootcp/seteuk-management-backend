@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import (
+    AccessNotAllowedError,
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     InvalidResetTokenError,
@@ -42,6 +43,14 @@ GOOGLE_USER_INFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GOOGLE_TIMEOUT_SECONDS = 10
 
 
+ACCESS_NOT_ALLOWED_MESSAGE = "이 환경은 허용된 계정만 쓸 수 있습니다"
+
+
+def ensure_email_allowed(email: str | None) -> None:
+    if not get_settings().is_email_allowed(email):
+        raise AccessNotAllowedError(ACCESS_NOT_ALLOWED_MESSAGE)
+
+
 async def issue_token_pair(db: AsyncSession, user_id: uuid.UUID) -> tuple[str, str]:
     """access는 무상태로 두고, refresh만 DB에 남겨 무효화할 수 있게 한다."""
     entry = RefreshToken(user_id=user_id, expires_at=refresh_token_expiry())
@@ -51,6 +60,8 @@ async def issue_token_pair(db: AsyncSession, user_id: uuid.UUID) -> tuple[str, s
 
 
 async def signup(db: AsyncSession, data: SignupRequest) -> tuple[User, str, str]:
+    # 계정을 만들거나 인증 메일을 보내기 전에 거른다.
+    ensure_email_allowed(data.email)
     existing = await db.scalar(select(User).where(User.email == data.email))
     if existing is not None:
         raise EmailAlreadyExistsError("이미 가입된 이메일입니다")
@@ -74,6 +85,7 @@ async def login(db: AsyncSession, data: LoginRequest) -> tuple[str, str]:
     if not verify_password(data.password, user.password_hash):
         raise InvalidCredentialsError("이메일 또는 비밀번호가 올바르지 않습니다")
 
+    ensure_email_allowed(user.email)
     return await issue_token_pair(db, user.id)
 
 
@@ -187,6 +199,8 @@ async def _load_active_refresh_token(db: AsyncSession, token: str) -> RefreshTok
 
 async def refresh_access_token(db: AsyncSession, token: str) -> str:
     entry = await _load_active_refresh_token(db, token)
+    user = await db.get(User, entry.user_id)
+    ensure_email_allowed(user.email if user else None)
     return create_access_token(entry.user_id)
 
 
@@ -229,6 +243,8 @@ async def _fetch_kakao_profile(kakao_access_token: str) -> tuple[str, str | None
 
 async def kakao_login(db: AsyncSession, kakao_access_token: str) -> tuple[str, str, bool]:
     kakao_id, email = await _fetch_kakao_profile(kakao_access_token)
+    # 이메일 동의를 안 해 이메일이 없으면 허용 목록과 대조할 수 없으므로 거부된다.
+    ensure_email_allowed(email)
 
     user = await db.scalar(select(User).where(User.kakao_id == kakao_id))
     is_new_user = False
@@ -284,6 +300,7 @@ async def _fetch_google_profile(google_access_token: str) -> tuple[str, str | No
 
 async def google_login(db: AsyncSession, google_access_token: str) -> tuple[str, str, bool]:
     google_id, email = await _fetch_google_profile(google_access_token)
+    ensure_email_allowed(email)
 
     user = await db.scalar(select(User).where(User.google_id == google_id))
     is_new_user = False
