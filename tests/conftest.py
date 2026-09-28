@@ -16,6 +16,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.user import User
+from app.services import email_service
 
 TEST_DATABASE_URL = get_settings().database_url.rsplit("/", 1)[0] + "/seteuk_test"
 
@@ -30,6 +31,18 @@ async def _prepare_database() -> AsyncGenerator[None]:
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    """.env에 RESEND_API_KEY가 있으면 가입 테스트마다 가짜 주소로 실제 메일이 나가고,
+    Resend 응답이 늦으면 전혀 무관한 테스트가 ReadTimeout으로 실패한다. 발송 경계를
+    막는다 — 메일 내용을 검증하는 테스트는 그 위의 send_* 함수를 따로 바꿔 끼운다."""
+
+    async def _skip(to: str, subject: str, html: str) -> None:
+        return None
+
+    monkeypatch.setattr(email_service, "_send", _skip)
 
 
 async def _override_get_db() -> AsyncGenerator[AsyncSession]:
