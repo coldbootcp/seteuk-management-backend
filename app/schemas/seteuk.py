@@ -29,25 +29,6 @@ class AcademicPerformanceItem(BaseModel):
     rank: str | None = None
 
 
-class ReadingActivityItem(BaseModel):
-    grade: int
-    semester: int | None = None
-    subject: str | None = None
-    title: str
-    author: str | None = None
-
-
-class AwardItem(BaseModel):
-    name: str
-    rank: str | None = None
-    date: datetime.date | None = None
-    raw_date: str | None = None
-    # 참가대상 원문("3학년(216명)" 등)과 거기서 읽어낸 학년-학기.
-    participants: str | None = None
-    grade: int | None = None
-    semester: int | None = None
-
-
 class VolunteerRecordItem(BaseModel):
     grade: int
     # 봉사활동실적 표는 학년만 열로 갖지만 일자가 있어 학기까지 정할 수 있다.
@@ -117,14 +98,15 @@ class ParseError(BaseModel):
 class SeteukAnalysisResult(BaseModel):
     # 인적사항이 밝힌 학생 성명. 읽지 못하면 None이며, 그때는 화면이 직접
     # 입력받는다. 온보딩에서 기본 정보를 자동 기입·잠금하는 근거가 된다.
+    # 파서가 읽은 값이며 파싱 직후 계정 이름과 대조한 뒤 버린다 — 저장된 결과에는 None이다.
     student_name: str | None = None
+    # 생기부 성명이 계정 이름과 같은지. 못 읽었거나 계정 이름이 없으면 None.
+    name_matches_account: bool | None = None
     # 학적사항이 밝힌 "1학년이었던 학년도". 날짜만 있는 기록(수상 등)을 학년-학기로
     # 옮기는 기준점이며, 반영할 때 사용자에 저장해 이후에도 쓴다.
     freshman_academic_year: int | None = None
     attendance: list[AttendanceItem] = []
     academic_performance: list[AcademicPerformanceItem] = []
-    reading_activities: list[ReadingActivityItem] = []
-    awards: list[AwardItem] = []
     volunteer_records: list[VolunteerRecordItem] = []
     activities: list[ActivityItem] = []
     errors: list[ParseError] = []
@@ -243,8 +225,6 @@ class ImportSelectionRequest(BaseModel):
 
     attendance: list[int] | None = None
     academic_performance: list[int] | None = None
-    reading_activities: list[int] | None = None
-    awards: list[int] | None = None
     volunteer_records: list[int] | None = None
     activities: list[int] | None = None
     # 파싱 결과의 시점을 학생이 고친 것. 지정된 항목만 덮어쓴다.

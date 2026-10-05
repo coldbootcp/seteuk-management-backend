@@ -92,7 +92,7 @@ def _timing_context(user: User | None) -> dict[str, Any]:
             "같은 재학생용 조언을 하지 마세요. 있는 기록을 어떻게 해석·활용할지에 "
             "집중하세요. "
             "3학년 2학기는 수시 원서 접수·수능을 치르는 입시 시기라 이전 학기보다 "
-            "새 탐구 활동이나 독서 기록이 적은 것이 정상입니다. 3학년 2학기의 기록이 "
+            "새 탐구 활동이 적은 것이 정상입니다. 3학년 2학기의 기록이 "
             "적다는 사실 자체를 약점이나 위협으로 규정하지 마세요. 만약 그 시기의 "
             "기록을 언급해야 한다면, 반드시 '3학년 2학기는 입시를 치르는 시기라 새 "
             "활동이 적은 것이 자연스럽다'는 맥락을 함께 밝혀, 학생을 탓하는 지적이 "
@@ -115,7 +115,7 @@ def _timing_context(user: User | None) -> dict[str, Any]:
 async def _review_semester(
     group: SemesterGroup, interests: dict[str, Any], timing_context: dict[str, Any]
 ) -> SemesterReview:
-    """학기별 평가 — 그 학기의 성적/독서/활동 원자료만 입력으로 받는다. LLM은
+    """학기별 평가 — 그 학기의 성적/활동 원자료만 입력으로 받는다. LLM은
     이 좁은 자료를 세 개의 구체적인 문장으로 옮기는 번역기 역할만 한다."""
     user_content = json.dumps(
         {
@@ -132,7 +132,6 @@ async def _review_semester(
         grade=group.grade,
         semester=group.semester,
         grades_review=draft.grades_review,
-        reading_review=draft.reading_review,
         activities_review=draft.activities_review,
     )
 
@@ -143,7 +142,7 @@ async def _write_career_thread(
     current_grade: int | None,
     current_semester: int | None,
 ) -> CareerThreadDraft:
-    """진로 유기적 평가 — 활동/수상/봉사 전체를 입력받아 **주제별 갈래**로 엮는다.
+    """진로 유기적 평가 — 활동/봉사 전체를 입력받아 **주제별 갈래**로 엮는다.
 
     학기별 평가와 달리 전체 이력을 한 번에 봐야 '연결'을 판단할 수 있으므로 학기
     단위로 쪼개지 않는다. 시간순 평면 배열이 아니라 갈래로 묶는 이유는, 학생이 보통
@@ -400,7 +399,7 @@ async def _write_knowledge_graph(
 
 
 def _semester_activity_facts(groups: list[SemesterGroup]) -> list[dict[str, Any]]:
-    """각 학기에 학기 단위 활동·학년 단위 활동·독서가 실제로 있었는지 코드가
+    """각 학기에 학기 단위 활동·학년 단위 활동이 실제로 있었는지 코드가
     판정한 사실. SWOT은 원본을 안 보고 학기 평가 텍스트만 보는데, 그 텍스트가
     "이 학기 활동 없음"으로 오염되면 SWOT이 공백을 확대 해석한다. 자율·진로활동은
     학년 단위(year_activities)라 특정 학기 activities가 비어도 실제로는 그 학년에
@@ -415,7 +414,6 @@ def _semester_activity_facts(groups: list[SemesterGroup]) -> list[dict[str, Any]
             # 있는 것이며, 특정 학기 activities가 비었다는 이유로 "활동이 없다"고
             # 말해선 안 된다.
             "has_year_activities": len(g.year_activities) > 0,
-            "has_reading": len(g.reading_activities) > 0,
             "has_grades": len(g.academic_performance) > 0,
         }
         for g in groups
@@ -440,7 +438,7 @@ async def _write_overall_assessment(
             # 졸업생/재학생·현재 학기 맥락. 이게 없으면 모든 학생을 재학생으로 보고
             # "남은 기간에 공백을 메우라"는 조언을 한다.
             "timing_context": timing_context.get("summary", ""),
-            # 학기별 활동/독서 유무를 코드가 판정한 사실. 학기 평가 텍스트가 특정
+            # 학기별 활동 유무를 코드가 판정한 사실. 학기 평가 텍스트가 특정
             # 학기를 "활동 없음"으로 썼더라도, 여기 has_year_activities가 true이면
             # 그 학년에는 실제로 활동이 있으므로 "활동 공백"으로 단정하면 안 된다.
             "semester_activity_facts": semester_activity_facts,

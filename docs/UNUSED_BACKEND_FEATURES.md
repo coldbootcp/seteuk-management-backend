@@ -51,7 +51,7 @@
 
 | 필드 | 뜻 | 계산 방식 |
 |---|---|---|
-| `semester_reviews` | 학기당 성적/독서/활동 3종 리뷰 텍스트 | 학기별 1회 LLM 호출, 그 학기 원자료만 봄 |
+| `semester_reviews` | 학기당 성적/활동 2종 리뷰 텍스트 | 학기별 1회 LLM 호출, 그 학기 원자료만 봄 |
 | `grades_trend` | 과목별 시계열 + 학기별 평균 등급 | **LLM 없이** 순수 계산, 차트용 |
 | `activity_inventory` | 활동 전량을 역량×심화도 축으로 분류 | 학년 단위 배치 호출 |
 | `knowledge_graph_links` | 활동 간 숨은 연결(계보로는 안 잡히는 것) | 활동 전체를 LLM에 통째로 주고 판단 |
@@ -104,7 +104,7 @@ SWOT·활동 인벤토리·지식 그래프가 전부 이 상태다. 진단 파�
 | `GET /plans` | 계획 목록 |
 | `POST /plans` | 계획 직접 생성 |
 | `GET /plans/{id}` · `PATCH /plans/{id}` · `DELETE /plans/{id}` | 계획 조회/수정/삭제 |
-| `POST /plans/{id}/complete` | **계획 → 기록 승격** — 활동/독서 탭에 실제 행을 만들고 계보를 잇는 지점 |
+| `POST /plans/{id}/complete` | **계획 → 기록 승격** — 활동 탭에 실제 행을 만들고 계보를 잇는 지점 |
 | `POST /roadmaps/plan-events/{id}/adopt` | 로드맵 제안 → 계획으로 담기 |
 | `GET /roadmaps/nodes/{id}/plans` | 그 마디에 담긴 계획 목록 |
 

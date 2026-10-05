@@ -31,3 +31,25 @@ def parse_student_name(section_text: str) -> str | None:
         return None
     name = match.group(1).strip()
     return name or None
+
+
+def parse_teacher_names(tables: list[list[list[str | None]]]) -> list[str]:
+    """표지 표("학년/학과/반/번호/담임성명")의 담임 이름들.
+
+    담임 이름은 개인정보 가리기(redact)와 LLM 전송 전 정리(sanitize)에서 학생 이름처럼 다룬다.
+    다른 교사 이름은 문서가 이름이라고 표시하지 않아 찾을 수 없다.
+    """
+    names: list[str] = []
+    for table in tables:
+        for row in table[:3]:
+            header = ["".join((cell or "").split()) for cell in row]
+            idx = next((i for i, c in enumerate(header) if "담임" in c and "성명" in c), None)
+            if idx is None:
+                continue
+            for body in table[table.index(row) + 1 :]:
+                if idx < len(body):
+                    value = "".join((body[idx] or "").split())
+                    if re.fullmatch(r"[가-힣]{2,5}", value) and value not in names:
+                        names.append(value)
+            break
+    return names

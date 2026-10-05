@@ -20,7 +20,7 @@ Phase 3 챗봇의 **현재 구현 상태**와 **비어 있는 부분**을 정리
 | SSE 스트리밍 (`token`/`action`/`done`/`error`) | O |
 | 일반 모드 (도구 미전달, 아무것도 저장 안 됨) | O |
 | 수정 모드 (토글이 곧 동의, 확인 단계 없음) | O |
-| 도구 13종 | O (삭제 도구는 의도적으로 없음) |
+| 도구 11종 | O (삭제 도구는 의도적으로 없음) |
 | 도구 인자 청크 병합 (index별) | O |
 | 도구 루프 최대 4라운드 | O |
 | 개인화 컨텍스트 조립 (기록 6종 + 진단 + 계획 + 메모리) | O |
@@ -29,9 +29,9 @@ Phase 3 챗봇의 **현재 구현 상태**와 **비어 있는 부분**을 정리
 | 하루 챗봇 메시지 한도 (`usage_events` 기반) | O |
 | 소유권 검사 (모든 조회가 `user_id`로 먼저 좁힘) | O |
 
-### 도구 13종
+### 도구 11종
 
-`add_reading` · `add_activity` · `update_activity` · `add_award` ·
+`add_activity` · `update_activity` ·
 `add_volunteer_record` · `add_academic_performance` · `add_plan` · `update_plan` ·
 `complete_plan` · `remember` · `update_profile_basics` · `run_diagnosis` ·
 `recommend_follow_up`
@@ -51,10 +51,10 @@ Phase 3 챗봇의 **현재 구현 상태**와 **비어 있는 부분**을 정리
    행은 UPDATE되지 않아 `onupdate`가 걸리지 않았고, 첫 메시지에서 제목이 채워진
    뒤로는 `updated_at`이 얼어붙었습니다. 방금 대화한 방이 목록 아래에 남았습니다.
 3. 대화가 스트림 직전에 삭제되면 예외가 새어 나가던 것을 SSE `error`로 바꿨습니다.
-4. 컨텍스트의 수상·봉사에 `ORDER BY`가 없어, 상한(30/20건)에 걸리면 **DB가 임의로
+4. 컨텍스트의 봉사 등에 `ORDER BY`가 없어, 상한(30/20건)에 걸리면 **DB가 임의로
    고른** 행이 실렸습니다. 같은 질문에 매번 다른 근거를 들 수 있었습니다. 최신순으로
    고정했습니다.
-5. `add_award` / `add_volunteer_record`가 `raw_date`만 받아 정규화된 `date`를
+5. `add_volunteer_record`가 `raw_date`만 받아 정규화된 `date`를
    영영 채우지 못했습니다("날짜는 항상 ISO 8601로 정규화" 원칙 위반). ISO `date`
    인자를 추가했습니다.
 
@@ -184,7 +184,7 @@ Phase 3 챗봇의 **현재 구현 상태**와 **비어 있는 부분**을 정리
 
 #### R-4. 온보딩 전에는 도구가 DB 에러 문자열을 그대로 노출합니다
 
-`add_reading` 등은 `grade`가 없으면 `user.current_grade`로 대체하는데, 온보딩
+`add_volunteer_record` 등은 `grade`가 없으면 `user.current_grade`로 대체하는데, 온보딩
 전에는 이 값이 `NULL`이라 NOT NULL 위반이 납니다. 그 예외 문자열
 (`IntegrityError: ...`)이 그대로 챗봇에게 전달되고, 챗봇이 그걸 학생에게
 설명합니다. 실제 서비스 흐름에서는 온보딩이 강제라 도달하기 어렵지만, 도구가

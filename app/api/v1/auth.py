@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import enforce_auth_rate_limit
 from app.db.session import get_db
+from app.models.waitlist_entry import WaitlistEntry
 from app.schemas.auth import (
     AccessTokenResponse,
     ForgotPasswordRequest,
@@ -25,7 +26,6 @@ from app.schemas.auth import (
     VerifyEmailRequest,
     WaitlistRequest,
 )
-from app.models.waitlist_entry import WaitlistEntry
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])

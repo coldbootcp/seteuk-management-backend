@@ -20,7 +20,16 @@ logger = logging.getLogger(__name__)
 # 재시도해도 같은 답이 나올 실패와, 다시 부르면 될 실패를 나눈다. 앞의 것은
 # 모델이 스키마에 맞지 않는 응답을 준 경우이고(PARSER_SPEC 2.5의 "재시도 없음"이
 # 가리키는 것이 이쪽이다), 뒤의 것은 연결·혼잡 같은 일시적인 사정이다.
-_TRANSIENT = (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
+_TRANSIENT = (
+    APITimeoutError,
+    APIConnectionError,
+    RateLimitError,
+    InternalServerError,
+    # 응답이 중간에서 끊겨 JSON이 깨진 경우. 스키마가 틀린 응답(ValidationError)과 달리
+    # 같은 입력을 다시 보내면 대개 온전히 온다 — 실제 생기부 검증에서 동아리활동 블록 하나가
+    # "Unterminated string"으로 통째로 버려졌다.
+    json.JSONDecodeError,
+)
 _MAX_TRANSIENT_ATTEMPTS = 3
 
 

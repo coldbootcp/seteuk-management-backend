@@ -9,7 +9,7 @@
 계획하는** 플랫폼의 백엔드다. 두 축이 있다.
 
 1. **현재를 기록한다** — 생기부 업로드 또는 온보딩 질문으로 출발해, 이후 활동·성적·
-   수행평가·독서가 생길 때마다 각 탭이나 챗봇으로 쌓는다. 진단이 현재 상태를 서사로
+   수행평가가 생길 때마다 각 탭이나 챗봇으로 쌓는다. 진단이 현재 상태를 서사로
    정리하고 강점/약점을 짚는다.
 2. **미래를 계획한다** — 생기부의 핵심은 활동이 학년이 오를수록 고도화되는 것이다.
    AI가 학기별 로드맵과 후속 탐구를 제안하고, 계획은 완료되면 실제 기록으로 승격되며
@@ -58,8 +58,6 @@
 | `seteuk_uploads` | id, user_id, status, parsing_confidence, raw_result, failure_reason | PDF 원본은 저장하지 않음 |
 | `attendance` | id, user_id, source_upload_id, grade, total_days, absence, note | |
 | `academic_performance` | …, grade, semester, category, subject, subject_code(카탈로그 코드, nullable), units, achievement_grade, student_count, raw_score, subject_average, std_deviation, rank | |
-| `reading_activities` | …, grade, semester, subject, title, author | |
-| `awards` | …, name, rank, date, raw_date | date는 ISO 8601, 원문은 raw_date |
 | `volunteer_records` | …, grade, date, raw_date, place, content, hours | |
 | `activities` | …, **parent_activity_id**, grade, semester, activity_category, subject, activity_name, activity_type, role, description, keywords, source_block, parsing_confidence | 활동 계보의 기록 쪽 절반 |
 | `plan_items` | id, user_id, item_type, title, description, subject, target_grade, target_semester, due_date, status, origin, source_activity_id, source_recommendation_id, completed_activity_id, completed_reading_id, keywords | 미래 계획 / 로드맵 |
@@ -88,7 +86,7 @@
   행동특성및종합의견` (생기부 파서가 채움) + `수행평가 | 교외활동 | 기타`
   (학생이 직접 기록)
 - `activity_type`: `report | presentation | experiment | project | reading_linked | other`
-- `plan_items.item_type`: `activity | reading | assessment | grade | volunteer | award | other`
+- `plan_items.item_type`: `activity | assessment | grade | volunteer | other`
 - `plan_items.status`: `planned | in_progress | done | dropped`
 - `plan_items.origin`: `user | ai_roadmap | recommendation | chatbot`
 - 챗봇 `mode`: `normal | edit`
@@ -230,8 +228,7 @@ Base URL: `/api/v1`
 버전, 다른 사람 것) 프로필을 갱신하지 않은 채 더 최신 생기부를 다시 올린
 경우, 아직 일어나지 않았어야 할 시점의 데이터가 진단·로드맵의 "현재 위치"
 판단을 어긋나게 만들기 때문이다. 같은 학년의 학년 단위 기록(자율활동 등,
-학기 구분이 없는 것)은 그 학년이 진행 중이면 허용한다. `awards`는
-grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러진 게 있으면
+학기 구분이 없는 것)은 그 학년이 진행 중이면 허용한다. 걸러진 게 있으면
 `errors`에 `block_id: "future_grade_filter"`로 몇 건이 왜 빠졌는지 남는다.
 
 **교체 업로드 (`mode=replace`, form 필드)** — 설정 탭의 올리기·"최신으로 교체". 온보딩
@@ -258,8 +255,8 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 **GET /seteuk/uploads/{upload_id}/result** → 200
 ```json
 {
-  "attendance": [...], "academic_performance": [...], "reading_activities": [...],
-  "awards": [...], "volunteer_records": [...], "activities": [...], "errors": []
+  "attendance": [...], "academic_performance": [...],
+  "volunteer_records": [...], "activities": [...], "errors": []
 }
 ```
 
@@ -456,7 +453,7 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
                   "subject_count": 11, "excluded_count": 5 }]
   },
   "semester_reviews": [{ "grade": 2, "semester": 1,
-                         "grades_review": "…", "reading_review": "…",
+                         "grades_review": "…",
                          "activities_review": "…" }],
   "career_thread": [{ "title": "버스 배차 최적화", "summary": "…",
                       "entries": [{ "grade": 1, "semester": "1 또는 null",
@@ -490,8 +487,8 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   `excluded_count`로 함께 내려 평균이 그 학기 전체를 대표하는 것처럼 읽히지
   않게 한다. 등급이 매겨진 과목이 하나도 없는 학기는 `average_rank`가 null이고
   선에서 빠진다.
-- **`semester_reviews`** — 학기당 1회 LLM 호출. **그 학기의** 성적/독서/활동
-  원자료만 입력받아 세 개의 독립된 텍스트로 낸다. 자료가 없는 측면은 억지로
+- **`semester_reviews`** — 학기당 1회 LLM 호출. **그 학기의** 성적/활동
+  원자료만 입력받아 두 개의 독립된 텍스트로 낸다. 자료가 없는 측면은 억지로
   채우지 않고 정직하게 "기록이 없다"고 쓴다.
 - **`career_thread`** — **주제별 갈래의 목록**이다. 학생은 보통 여러 갈래를 동시에
   굴리므로(로봇 만들기 / 데이터 분석 / 지역 봉사), 시간순 평면 배열로 늘어놓으면
@@ -499,9 +496,9 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
   정렬된 `entries`를 갖는다(정렬은 코드가 보증한다). 갈래는 진단 출력으로 끝나지
   않고 `activity_threads`에 저장되며 `activities.thread_id`가 채워진다.
 
-  활동 전체(계보 `parent_activity_id` 포함) + 수상 + 봉사를
+  활동 전체(계보 `parent_activity_id` 포함) + 봉사를
   함께 입력받는 1회 호출. 진로 관점에서 의미 있는 것만 사슬에 올리므로(중요하지
-  않은 건 자동으로 빠짐), 활동뿐 아니라 수상·봉사도 노드가 될 수 있다. 과거
+  않은 건 자동으로 빠짐), 활동뿐 아니라 봉사도 노드가 될 수 있다. 과거
   (`completed`)와 학생의 현재 학년-학기 이후 제안(`suggested`)이 학년-학기 순으로
   한 배열에 담긴다. `semester`는 자율활동/진로활동처럼 원자료 자체가 학기 없이
   학년 단위로만 존재하는 근거를 든 `completed` 노드에 한해 `null`일 수 있다
@@ -544,16 +541,17 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 > 커트라인·전형 요강 데이터가 없는 상태에서 만들면 LLM이 그럴듯한 대학명과
 > 점수를 지어내게 된다 — 실제 데이터를 확보하기 전까지는 넣지 않는다.
 
-### 3.5 탭 관리 — 출결 / 성적 / 독서 / 수상 / 봉사 / 활동
+### 3.5 탭 관리 — 출결 / 성적 / 봉사 / 활동
 
-6개 리소스가 동일한 CRUD 패턴을 따른다.
+> 수상경력·독서활동상황은 대입 평가에 반영되지 않아 서비스에서 없앴다(`/awards`,
+> `/reading-activities` 제거, 관련 테이블 삭제).
+
+여러 리소스가 동일한 CRUD 패턴을 따른다.
 
 | 리소스 | 경로 | 필터 |
 |---|---|---|
 | 출결 | `/attendance` | grade |
 | 교과 성적 | `/academic-performance` | grade, semester, subject, category |
-| 독서 | `/reading-activities` | grade, semester, subject |
-| 수상 | `/awards` | — |
 | 봉사 | `/volunteer-records` | grade |
 | 활동 | `/activities` | grade, semester, activity_category, activity_type, subject |
 
@@ -625,12 +623,12 @@ grade/semester가 없고 날짜만 있어 이 검사 대상이 아니다. 걸러
 ```json
 // Request — 비우면 계획의 값과 사용자의 현재 학년/학기로 채운다
 { "grade": 2, "semester": 2, "activity_category": "과목세부특기사항",
-  "activity_type": "report", "description": "…", "author": "…" }
+  "activity_type": "report", "description": "…" }
 // Response
 { "plan_item": { … , "status": "done" },
-  "created_activity_id": "uuid 또는 null", "created_reading_id": "uuid 또는 null" }
+  "created_activity_id": "uuid 또는 null" }
 ```
-`activity`/`assessment` 계획은 활동으로, `reading` 계획은 독서 기록으로 승격된다.
+`activity`/`assessment` 계획은 활동으로 승격된다.
 나머지 타입은 상태만 `done`이 된다. 이미 완료된 계획을 다시 완료하면 409
 `INVALID_PLAN_TRANSITION`.
 
@@ -824,16 +822,16 @@ LLM 컨텍스트에는 추출 텍스트만 실리고 파일 본문은 싣지 않
 ```
 ```
 event: action
-data: {"tool": "add_reading", "arguments": {"title": "이기적 유전자"}, "result": {"reading_id": "uuid", "title": "이기적 유전자"}}
+data: {"tool": "add_volunteer_record", "arguments": {"place": "지역아동센터"}, "result": {"place": "지역아동센터"}}
 
 event: token
-data: {"delta": "독서 기록에"}
+data: {"delta": "봉사 기록에"}
 
 event: done
 data: {"message_id": "uuid", "applied_actions": [...]}
 
 event: title
-data: {"conversation_id": "uuid", "title": "이기적 유전자 독서 기록"}
+data: {"conversation_id": "uuid", "title": "지역아동센터 봉사 기록"}
 
 event: error
 data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해주세요"}
@@ -847,7 +845,7 @@ data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해�
   (토글 자체가 동의다). 실행된 것은 `action` 이벤트로 흘러나오고 메시지의
   `applied_actions`에 남는다.
 
-**수정 모드 도구** — `add_reading`, `add_activity`, `update_activity`, `add_award`,
+**수정 모드 도구** — `add_activity`, `update_activity`,
 `add_volunteer_record`, `add_academic_performance`, `add_plan`, `update_plan`,
 `complete_plan`, `remember`(개인화 메모리), `update_profile_basics`, `run_diagnosis`,
 `recommend_follow_up`.
@@ -861,7 +859,7 @@ data: {"error_code": "LLM_UNAVAILABLE", "message": "잠시 후 다시 시도해�
 (`title_source: "user"`)은 건드리지 않는다.
 
 챗봇의 개인화 재료는 매 요청마다 조립된다: 기본 정보 + `student_interests`(메모리) +
-최신 진단 + 활동/성적/독서/수상/봉사/출결 + 진행 중인 계획 + 직전 20개 메시지. 각
+최신 진단 + 활동/성적/봉사/출결 + 진행 중인 계획 + 직전 20개 메시지. 각
 영역에는 상한이 있고, 잘린 경우 `counts`에 전체 개수가 함께 들어가 챗봇이 "기록이 더
 있다"는 사실을 알 수 있다.
 

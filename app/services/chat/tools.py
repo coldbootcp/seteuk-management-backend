@@ -15,9 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity, ActivityCategory, ActivityType
-from app.models.award import Award
 from app.models.plan_item import PlanItemOrigin, PlanItemType
-from app.models.reading_activity import ReadingActivity
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.plan import PlanItemCompleteRequest, PlanItemCreate
@@ -55,22 +53,6 @@ def _date(value: Any) -> dt.date | None:
         return dt.date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
-
-
-async def _add_reading(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    row = await record_service.create_record(
-        db,
-        ReadingActivity,
-        user.id,
-        {
-            "grade": args.get("grade") or user.current_grade,
-            "semester": args.get("semester") or user.current_semester,
-            "subject": args.get("subject"),
-            "title": args["title"],
-            "author": args.get("author"),
-        },
-    )
-    return {"reading_id": str(row.id), "title": row.title}
 
 
 async def _add_activity(
@@ -122,21 +104,6 @@ async def _update_activity(
         )
     row = await record_service.update_record(db, Activity, user.id, activity_id, fields)
     return {"activity_index": args["activity_index"], "activity_name": row.activity_name}
-
-
-async def _add_award(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
-    row = await record_service.create_record(
-        db,
-        Award,
-        user.id,
-        {
-            "name": args["name"],
-            "rank": args.get("rank"),
-            "date": _date(args.get("date")),
-            "raw_date": args.get("raw_date"),
-        },
-    )
-    return {"name": row.name}
 
 
 async def _add_volunteer(db: AsyncSession, user: User, args: dict[str, Any]) -> dict[str, Any]:
@@ -290,18 +257,6 @@ _SEMESTER = {"type": "integer", "description": "학기(1~2). 생략하면 학생
 
 TOOL_SPECS: list[dict[str, Any]] = [
     _tool(
-        "add_reading",
-        "학생이 읽은 책을 독서 탭에 추가한다.",
-        {
-            "title": {"type": "string"},
-            "author": {"type": "string"},
-            "subject": {"type": "string", "description": "관련 교과"},
-            "grade": _GRADE,
-            "semester": _SEMESTER,
-        },
-        ["title"],
-    ),
-    _tool(
         "add_activity",
         "학생이 수행한 활동(탐구/발표/실험/프로젝트/수행평가 등)을 활동 탭에 추가한다. "
         "이 활동이 기존 활동을 발전시킨 것이면 parent_activity_index를 반드시 채워라.",
@@ -350,20 +305,6 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "parent_activity_index": {"type": "integer"},
         },
         ["activity_index"],
-    ),
-    _tool(
-        "add_award",
-        "수상 경력을 추가한다.",
-        {
-            "name": {"type": "string"},
-            "rank": {"type": "string"},
-            "date": {
-                "type": "string",
-                "description": "ISO 8601 날짜(YYYY-MM-DD). 학생이 정확한 날짜를 말한 경우에만",
-            },
-            "raw_date": {"type": "string", "description": "학생이 말한 날짜 표현 원문"},
-        },
-        ["name"],
     ),
     _tool(
         "add_volunteer_record",
@@ -428,8 +369,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
     ),
     _tool(
         "complete_plan",
-        "계획을 완료 처리한다. 활동/수행평가 계획은 활동 기록으로, 독서 계획은 "
-        "독서 기록으로 자동 승격된다.",
+        "계획을 완료 처리한다. 활동/수행평가 계획은 활동 기록으로 "
+        "자동 승격된다.",
         {"plan_index": {"type": "integer"}},
         ["plan_index"],
     ),
@@ -473,10 +414,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
 ]
 
 TOOL_HANDLERS = {
-    "add_reading": _add_reading,
     "add_activity": _add_activity,
     "update_activity": _update_activity,
-    "add_award": _add_award,
     "add_volunteer_record": _add_volunteer,
     "add_academic_performance": _add_academic_performance,
     "add_plan": _add_plan,

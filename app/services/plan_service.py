@@ -16,7 +16,6 @@ from app.core.exceptions import InvalidPlanTransitionError, PlanItemNotFoundErro
 from app.models.activity import Activity, ActivityCategory, ActivityType
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemOrigin, PlanItemStatus, PlanItemType
-from app.models.reading_activity import ReadingActivity
 from app.models.roadmap import RoadmapNode, RoadmapPlanEvent
 from app.models.user import User
 from app.schemas.plan import (
@@ -80,8 +79,8 @@ async def delete_plan_item(db: AsyncSession, user_id: uuid.UUID, plan_id: uuid.U
 async def complete_plan_item(
     db: AsyncSession, user: User, plan_id: uuid.UUID, data: PlanItemCompleteRequest
 ) -> PlanItem:
-    """계획을 실제 기록으로 승격시킨다. 활동/수행평가는 activities로, 독서는
-    reading_activities로 옮겨가고, 나머지 타입은 상태만 done이 된다."""
+    """계획을 실제 기록으로 승격시킨다. 활동/수행평가는 activities로 옮겨가고,
+    나머지 타입은 상태만 done이 된다."""
     plan = await get_plan_item(db, user.id, plan_id)
     if plan.status == PlanItemStatus.DONE.value:
         raise InvalidPlanTransitionError("이미 완료된 계획입니다")
@@ -114,23 +113,6 @@ async def complete_plan_item(
         db.add(activity)
         await db.flush()
         plan.completed_activity_id = activity.id
-
-    elif plan.item_type == PlanItemType.READING:
-        if grade is None:
-            raise InvalidPlanTransitionError(
-                "독서로 기록하려면 학년이 필요합니다 — grade를 함께 보내주세요"
-            )
-        reading = ReadingActivity(
-            user_id=user.id,
-            grade=grade,
-            semester=semester,
-            subject=plan.subject,
-            title=plan.title,
-            author=data.author,
-        )
-        db.add(reading)
-        await db.flush()
-        plan.completed_reading_id = reading.id
 
     plan.status = PlanItemStatus.DONE.value
     await db.commit()

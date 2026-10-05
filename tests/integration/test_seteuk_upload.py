@@ -10,14 +10,13 @@ import app.services.seteuk_service as seteuk_service
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import ActivityCategory, ActivityType
 from app.models.attendance import Attendance
-from app.models.award import Award
 from app.models.seteuk_upload import SeteukUpload
 from app.models.user import User
+from app.models.volunteer_record import VolunteerRecord
 from app.schemas.seteuk import (
     AcademicPerformanceItem,
     ActivityItem,
     AttendanceItem,
-    AwardItem,
     SeteukAnalysisResult,
     VolunteerRecordItem,
 )
@@ -247,10 +246,7 @@ FAKE_RESULT_WITH_FUTURE_SEMESTER_DATA = SeteukAnalysisResult(
             description="학급 행사를 기획함.",
         ),
     ],
-    awards=[
-        # grade/semester가 없어(date만 있음) 이 검사의 대상이 아니다 — 그대로 남는다.
-        AwardItem(name="전국 수학경시대회 금상"),
-    ],
+    volunteer_records=[VolunteerRecordItem(grade=1, place="지역아동센터", hours=2)],
 )
 
 
@@ -323,8 +319,7 @@ async def test_upload_drops_records_beyond_declared_current_semester(
     assert kept_subjects == {"수학Ⅰ"}
     kept_activity_names = {item["activity_name"] for item in result["activities"]}
     assert kept_activity_names == {"지수함수 모델링", "학급자치회 활동"}
-    # grade/semester가 없는 수상은 판단 근거가 없어 그대로 남는다.
-    assert len(result["awards"]) == 1
+    assert len(result["volunteer_records"]) == 1
 
     # 몇 건이 왜 빠졌는지 errors에 남는다.
     assert any(e["block_id"] == "future_grade_filter" for e in result["errors"])
@@ -449,8 +444,6 @@ async def test_student_can_import_only_the_rows_they_picked(
     assert imported.json()["imported"] == {
         "attendance": 0,
         "academic_performance": 2,
-        "reading_activities": 0,
-        "awards": 0,
         "volunteer_records": 0,
         "activities": 0,
     }
@@ -521,15 +514,15 @@ async def test_import_before_parsing_finishes_is_refused(
 async def test_importing_one_category_does_not_wipe_another(
     client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """검토 화면은 [상장]·[활동]처럼 카테고리별로 나눠 반영한다. 매번 전부 비우면
-    상장을 반영하는 순간 앞서 반영한 성적이 사라진다 — 학생 눈에는 데이터 손실이다."""
+    """검토 화면은 [봉사]·[활동]처럼 카테고리별로 나눠 반영한다. 매번 전부 비우면
+    봉사를 반영하는 순간 앞서 반영한 성적이 사라진다 — 학생 눈에는 데이터 손실이다."""
 
     async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
         return SeteukAnalysisResult(
             academic_performance=[
                 AcademicPerformanceItem(grade=1, semester=1, category="수학", subject="수학"),
             ],
-            awards=[AwardItem(name="교내 수학경시대회")],
+            volunteer_records=[VolunteerRecordItem(grade=1, place="교내", hours=1)],
         )
 
     monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
@@ -546,18 +539,18 @@ async def test_importing_one_category_does_not_wipe_another(
         json={"academic_performance": [0]},
         headers=auth_headers,
     )
-    # 이어서 수상만 반영한다.
+    # 이어서 봉사만 반영한다.
     await client.post(
         f"/api/v1/seteuk/uploads/{upload_id}/import",
-        json={"awards": [0]},
+        json={"volunteer_records": [0]},
         headers=auth_headers,
     )
 
     async with TestSessionLocal() as db:
         grades = (await db.execute(select(AcademicPerformance))).scalars().all()
-        awards = (await db.execute(select(Award))).scalars().all()
+        volunteer = (await db.execute(select(VolunteerRecord))).scalars().all()
     assert len(grades) == 1, "앞서 반영한 성적이 남아 있어야 한다"
-    assert len(awards) == 1
+    assert len(volunteer) == 1
 
 
 async def test_importing_everything_still_replaces_everything(
@@ -567,7 +560,9 @@ async def test_importing_everything_still_replaces_everything(
     대체한다 — 재업로드가 파서 데이터를 갈아치우는 기존 규칙 그대로다."""
 
     async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
-        return SeteukAnalysisResult(awards=[AwardItem(name="새 수상")])
+        return SeteukAnalysisResult(
+            volunteer_records=[VolunteerRecordItem(grade=1, place="새 봉사")]
+        )
 
     monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
     created = await client.post(
@@ -585,8 +580,8 @@ async def test_importing_everything_still_replaces_everything(
     )
 
     async with TestSessionLocal() as db:
-        awards = (await db.execute(select(Award))).scalars().all()
-    assert len(awards) == 1
+        volunteer = (await db.execute(select(VolunteerRecord))).scalars().all()
+    assert len(volunteer) == 1
 
 
 async def test_latest_upload_lets_the_client_resume_without_remembering_the_id(
@@ -807,7 +802,7 @@ async def test_the_enrollment_year_survives_filtering_and_reaches_the_user(
 
     async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
         return SeteukAnalysisResult(
-            freshman_academic_year=2018,
+            freshman_academic_year=2025,
             attendance=list(FAKE_RESULT.attendance),
         )
 
@@ -838,7 +833,7 @@ async def test_the_enrollment_year_survives_filtering_and_reaches_the_user(
 
     async with TestSessionLocal() as db:
         user = await db.scalar(select(User))
-    assert user is not None and user.freshman_academic_year == 2018
+    assert user is not None and user.freshman_academic_year == 2025
 
 
 # --- 입학 연도 기반 "지금쯤 몇 학년 몇 학기여야 하는지" 계산 — 순수 함수 단위 테스트 ---
@@ -898,3 +893,29 @@ def test_max_document_period_is_none_semester_when_only_grade_level_records_exis
 
 def test_max_document_period_is_none_when_no_grade_found_anywhere() -> None:
     assert seteuk_service._max_document_period(SeteukAnalysisResult()) is None
+
+
+async def test_a_graduates_record_is_not_accepted(
+    client: AsyncClient, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """졸업생의 생기부는 아직 받지 않는다 — 문서가 밝힌 입학 연도가 3개 학년도를 넘겼으면
+    반영하지 않고 이유를 알려 준다."""
+
+    async def _fake_parse(pdf_bytes: bytes) -> SeteukAnalysisResult:
+        return SeteukAnalysisResult(
+            freshman_academic_year=2018, attendance=list(FAKE_RESULT.attendance)
+        )
+
+    monkeypatch.setattr(seteuk_service, "parse_seteuk_pdf", _fake_parse)
+    created = (
+        await client.post(
+            "/api/v1/seteuk/uploads",
+            files={"file": ("record.pdf", b"%PDF-1.4", "application/pdf")},
+            headers=auth_headers,
+        )
+    ).json()
+    status = (
+        await client.get(f"/api/v1/seteuk/uploads/{created['upload_id']}", headers=auth_headers)
+    ).json()
+    assert status["status"] == "failed"
+    assert "졸업" in status["failure_reason"]

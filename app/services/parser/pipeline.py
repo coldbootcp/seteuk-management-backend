@@ -17,19 +17,20 @@ from app.services.parser.extract import extract_tables, extract_text, strip_nois
 from app.services.parser.grades import (
     extract_subject_names_from_text,
     parse_academic_performance,
+    parse_academic_performance_from_layout,
     parse_academic_performance_from_text,
 )
-from app.services.parser.identity import parse_student_name
+from app.services.parser.identity import parse_student_name, parse_teacher_names
 from app.services.parser.llm import get_provider, parse_block
 from app.services.parser.prompts import (
     CHANGCHE_SYSTEM_PROMPT,
     HAENGBAL_SYSTEM_PROMPT,
     SETEUK_SYSTEM_PROMPT,
 )
+from app.services.parser.redact import sanitize_text
 from app.services.parser.sections import split_sections
 from app.services.parser.tables import (
-    parse_awards,
-    parse_reading_activities,
+    parse_volunteer_from_layout,
     parse_volunteer_records,
 )
 
@@ -151,6 +152,18 @@ async def _run_llm_jobs(jobs: list[_LLMJob]) -> tuple[list[ActivityItem], list[P
     return activities, errors
 
 
+def _volunteer_records(tables: list, pdf_bytes: bytes):
+    """표로 읽어 시간이 채워지면 그대로 쓴다. 한 칸에 뭉쳐 오는 새 서식은 좌표로 다시 읽는다."""
+    from_table = parse_volunteer_records(tables)
+    if any(item.hours is not None for item in from_table):
+        return from_table
+    return parse_volunteer_from_layout(pdf_bytes) or from_table
+
+
+def _scrub(value: str | None, student_name: str | None, teachers: list[str]) -> str | None:
+    return sanitize_text(value, student_name, teachers) if value else value
+
+
 async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     text = strip_noise(extract_text(pdf_bytes))
     tables = extract_tables(pdf_bytes)
@@ -159,21 +172,36 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
     attendance = parse_attendance_from_tables(tables) or parse_attendance(
         sections.get("출결상황", "")
     )
-    academic_performance = parse_academic_performance_from_text(
-        sections.get("교과학습발달상황", "")
-    ) or parse_academic_performance(sections.get("교과학습발달상황", ""))
+    # 셀 좌표로 읽는 쪽이 정본이다 — 학기가 행으로 놓이는 서식에서 텍스트 방식은 2학기 성적을
+    # 1학기로 붙였다. 표를 못 읽는 문서일 때만 옛 텍스트 방식으로 돌아간다.
+    academic_performance = (
+        parse_academic_performance_from_layout(pdf_bytes)
+        or parse_academic_performance_from_text(sections.get("교과학습발달상황", ""))
+        or parse_academic_performance(sections.get("교과학습발달상황", ""))
+    )
     student_name = parse_student_name(sections.get("인적사항", ""))
-    # 날짜만 있는 기록(수상)에 학년을 붙이려면 기준점이 먼저 있어야 한다.
+    teachers = parse_teacher_names(tables)
     freshman_academic_year = parse_freshman_academic_year(sections.get("학적사항", ""))
-    awards = parse_awards(tables, freshman_academic_year)
-    volunteer_records = parse_volunteer_records(tables)
-    reading_activities = parse_reading_activities(tables)
+    volunteer_records = [
+        item.model_copy(
+            update={
+                # 표 셀 원문(raw_date)에도 "(학교)○○고등학교"가 그대로 붙어 온다.
+                "place": _scrub(item.place, student_name, teachers),
+                "raw_date": _scrub(item.raw_date, student_name, teachers),
+            }
+        )
+        for item in _volunteer_records(tables, pdf_bytes)
+    ]
     career_activities = parse_career_aspirations(tables)
 
-    subjects = extract_subject_names_from_text(sections.get("교과학습발달상황", "")) or sorted(
-        {item.subject for item in academic_performance}
+    subjects = sorted({item.subject for item in academic_performance}) or (
+        extract_subject_names_from_text(sections.get("교과학습발달상황", ""))
     )
     jobs = _build_llm_jobs(sections, subjects, tables, academic_performance)
+    # 외부 LLM으로 나가는 텍스트(그리고 source_block으로 저장되는 텍스트)에서 학생 이름과
+    # 식별 패턴을 뺀다.
+    for job in jobs:
+        job.text = sanitize_text(job.text, student_name, teachers)
     llm_activities, errors = await _run_llm_jobs(jobs)
 
     return SeteukAnalysisResult(
@@ -181,8 +209,6 @@ async def parse_seteuk_pdf(pdf_bytes: bytes) -> SeteukAnalysisResult:
         freshman_academic_year=freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,
-        reading_activities=reading_activities,
-        awards=awards,
         volunteer_records=volunteer_records,
         activities=career_activities + llm_activities,
         errors=errors,

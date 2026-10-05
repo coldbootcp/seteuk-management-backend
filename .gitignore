@@ -26,5 +26,5 @@ node_modules/
 htmlcov/
 
 # Sample 생기부 with real personal data — never commit
-tmp.pdf
+tmp*.pdf
 

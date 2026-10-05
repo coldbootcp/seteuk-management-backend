@@ -1,6 +1,6 @@
 """탭 관리(Phase 4) 라우터.
 
-6개 리소스가 같은 CRUD 형태를 가지므로 라우터를 손으로 6번 쓰는 대신 팩토리로
+여러 리소스가 같은 CRUD 형태를 가지므로 라우터를 손으로 여러 번 쓰는 대신 팩토리로
 찍어낸다. 라우터는 여전히 검증 → 서비스 호출 → 응답 변환만 담당하고, 실제 로직은
 record_service에 있다.
 """
@@ -21,9 +21,7 @@ from app.db.session import get_db
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
-from app.models.award import Award
 from app.models.calendar_event import CalendarEvent
-from app.models.reading_activity import ReadingActivity
 from app.models.usage_event import UsageAction
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
@@ -38,16 +36,10 @@ from app.schemas.records import (
     AttendanceCreate,
     AttendanceRead,
     AttendanceUpdate,
-    AwardCreate,
-    AwardRead,
-    AwardUpdate,
     CalendarEventCreate,
     CalendarEventRead,
     CalendarEventUpdate,
     ListResponse,
-    ReadingActivityCreate,
-    ReadingActivityRead,
-    ReadingActivityUpdate,
     VolunteerRecordCreate,
     VolunteerRecordRead,
     VolunteerRecordUpdate,
@@ -76,16 +68,6 @@ class AcademicPerformanceFilters(Pagination):
     semester: int | None = None
     subject: str | None = None
     category: str | None = None
-
-
-class ReadingActivityFilters(Pagination):
-    grade: int | None = None
-    semester: int | None = None
-    subject: str | None = None
-
-
-class AwardFilters(Pagination):
-    pass
 
 
 class VolunteerRecordFilters(Pagination):
@@ -230,32 +212,6 @@ academic_performance_router = build_record_router(
     before_update=_validate_academic_performance_update,
 )
 
-reading_activity_router = build_record_router(
-    prefix="/reading-activities",
-    tag="reading-activities",
-    model=ReadingActivity,
-    create_schema=ReadingActivityCreate,
-    update_schema=ReadingActivityUpdate,
-    read_schema=ReadingActivityRead,
-    filter_schema=ReadingActivityFilters,
-    order_by=lambda: [
-        ReadingActivity.grade.asc(),
-        ReadingActivity.semester.asc(),
-        ReadingActivity.title.asc(),
-    ],
-)
-
-award_router = build_record_router(
-    prefix="/awards",
-    tag="awards",
-    model=Award,
-    create_schema=AwardCreate,
-    update_schema=AwardUpdate,
-    read_schema=AwardRead,
-    filter_schema=AwardFilters,
-    order_by=lambda: [Award.date.asc().nullslast(), Award.name.asc()],
-)
-
 volunteer_record_router = build_record_router(
     prefix="/volunteer-records",
     tag="volunteer-records",
@@ -316,8 +272,6 @@ async def get_activity_lineage(
 record_routers = [
     attendance_router,
     academic_performance_router,
-    reading_activity_router,
-    award_router,
     volunteer_record_router,
     activity_router,
     calendar_event_router,

@@ -37,10 +37,10 @@ class Diagnosis(Base):
 
     # 성적 추이 — LLM을 거치지 않는 순수 데이터(GradesTrend). 프론트가 그래프로 그린다.
     grades_trend: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    # 학기별 평가 — 학기당 1회 LLM 호출. 그 학기의 성적/독서/활동 데이터만 입력받아
-    # 세 개의 독립된 텍스트(grades_review/reading_review/activities_review)를 낸다.
+    # 학기별 평가 — 학기당 1회 LLM 호출. 그 학기의 성적/활동 데이터만 입력받아
+    # 두 개의 독립된 텍스트(grades_review/activities_review)를 낸다.
     semester_reviews: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # 진로 유기적 평가 — 활동 전체(계보 포함) + 수상 + 봉사를 함께 입력받아, 진로
+    # 진로 유기적 평가 — 활동 전체(계보 포함) + 봉사를 함께 입력받아, 진로
     # 관점에서 의미 있는 것만 사슬로 엮는다(중요하지 않은 건 자동으로 빠진다).
     # 과거(completed)+미래(suggested)가 학년-학기 순으로 하나의 배열에 담긴다.
     career_thread: Mapped[list | None] = mapped_column(JSONB, nullable=True)

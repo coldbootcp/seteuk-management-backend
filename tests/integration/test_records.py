@@ -78,8 +78,6 @@ async def test_all_record_tabs_accept_manual_entry(
             "subject": "수학Ⅰ",
             "achievement_grade": "A",
         },
-        "/api/v1/reading-activities": {"grade": 2, "title": "이기적 유전자"},
-        "/api/v1/awards": {"name": "수학 경시대회", "rank": "금상"},
         "/api/v1/volunteer-records": {"grade": 2, "place": "지역아동센터", "hours": 8},
     }
     for path, payload in payloads.items():

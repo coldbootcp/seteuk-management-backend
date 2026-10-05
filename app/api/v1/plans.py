@@ -143,10 +143,9 @@ async def complete_plan(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PlanItemCompleteResponse:
-    """계획을 실제 기록으로 승격 — 활동/독서 탭에 행이 생기고 계보가 이어진다."""
+    """계획을 실제 기록으로 승격 — 활동 탭에 행이 생기고 계보가 이어진다."""
     plan = await plan_service.complete_plan_item(db, user, plan_id, data)
     return PlanItemCompleteResponse(
         plan_item=PlanItemRead.model_validate(plan),
         created_activity_id=plan.completed_activity_id,
-        created_reading_id=plan.completed_reading_id,
     )

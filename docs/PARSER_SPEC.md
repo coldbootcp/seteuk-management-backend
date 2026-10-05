@@ -13,7 +13,7 @@
 
 | 영역 | 방식 | 이유 |
 |---|---|---|
-| 출결, 성적, 수상, 봉사, 독서 | Rule-based (정규식 + 표 파서) | 포맷 고정, 빠르고 정밀하며 비용 없음 |
+| 출결, 성적, 봉사 | Rule-based (정규식 + 표 파서) | 포맷 고정, 빠르고 정밀하며 비용 없음 |
 | 세특, 창체(자율/동아리/진로), 행특 | LLM (DeepSeek, 비동기 병렬) | 자유 서술형 텍스트, 문맥 이해 필요 |
 
 ---
@@ -41,7 +41,9 @@ SECTION_PATTERN = re.compile(
 - **학기 매핑 (수정)**: 인접 패턴 간 문자 간격으로 학기를 추정하지 않는다. 원문에 명시된 `1학기`, `2학기` 라벨을 앵커로 잡고, 그 라벨 다음에 오는 성적 패턴들을 해당 학기로 매핑한다. 학년과 동일한 방식(라벨 오프셋 기반)을 적용할 것.
 - `achievement_grade`, `student_count`는 `r"([A-E])\((\d+)\)"`로 분리 저장 (합쳐서 저장하지 않음)
 
-### 1.4 수상 / 봉사 / 독서
+### 1.4 봉사
+> 수상경력·독서활동상황은 대입에 반영되지 않아 읽지 않는다(서비스에서 제거). 두 구역의 제목은 이웃 구역의 경계로만 쓴다.
+
 - pdfplumber 표 추출 결과를 `학년 | 항목 | 내용` 형태로 정제 후 딕셔너리 변환
 - 병합 셀로 인한 빈 행은 이전 행의 학년/과목 값을 상태 변수로 유지하며 보정
 
@@ -90,7 +92,7 @@ async def parse_block(block: TextBlock) -> list[Activity] | None:
 
 ## 3. 최종 병합
 
-Rule-based 결과(출결/성적/수상/봉사/독서)와 LLM 결과(활동 타임라인)를 `SeteukAnalysisResult` 스키마로 병합하여 반환한다. `parsing_confidence` 필드는 이번 구현 범위에서 제외한다.
+Rule-based 결과(출결/성적/봉사)와 LLM 결과(활동 타임라인)를 `SeteukAnalysisResult` 스키마로 병합하여 반환한다. `parsing_confidence` 필드는 이번 구현 범위에서 제외한다.
 
 ---
 
@@ -121,23 +123,6 @@ Rule-based 결과(출결/성적/수상/봉사/독서)와 LLM 결과(활동 타�
       "subject_average": 78.4,
       "std_deviation": 12.1,
       "rank": ""
-    }
-  ],
-  "reading_activities": [
-    {
-      "grade": 2,
-      "semester": 1,
-      "subject": "생명과학",
-      "title": "이기적 유전자",
-      "author": "리처드 도킨스"
-    }
-  ],
-  "awards": [
-    {
-      "name": "수학 경시대회",
-      "rank": "금상(1위)",
-      "date": "2023-05-20",
-      "raw_date": "2023.05.20"
     }
   ],
   "volunteer_records": [

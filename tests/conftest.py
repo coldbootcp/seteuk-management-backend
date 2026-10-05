@@ -34,6 +34,15 @@ async def _prepare_database() -> AsyncGenerator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _passthrough_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """통합 테스트는 "%PDF-1.4 ..." 같은 가짜 본문을 올린다 — 실제 PDF가 아니라 가리기가
+    실패한다. 가리기 자체는 tests/unit/test_redact.py가 진짜 PDF로 검증한다."""
+    from app.services import seteuk_service
+
+    monkeypatch.setattr(seteuk_service, "redact_pdf", lambda data: (data, None))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_email(monkeypatch: pytest.MonkeyPatch) -> None:
     """.env에 RESEND_API_KEY가 있으면 가입 테스트마다 가짜 주소로 실제 메일이 나가고,
     Resend 응답이 늦으면 전혀 무관한 테스트가 ReadTimeout으로 실패한다. 발송 경계를
