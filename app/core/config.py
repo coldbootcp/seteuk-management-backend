@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
+    # dev처럼 아무나 쓰면 안 되는 환경을 허용한 계정으로만 닫는다. 콤마로 구분된 이메일
+    # 목록이고, 비워 두면(운영·로컬 기본값) 누구나 가입·로그인할 수 있다. 목록이 있으면
+    # 가입·로그인·소셜 로그인·토큰 갱신·모든 인증 요청에서 목록 밖 계정을 거부한다.
+    access_allowlist: str = ""
+
+    def is_email_allowed(self, email: str | None) -> bool:
+        allowed = {e.strip().lower() for e in self.access_allowlist.split(",") if e.strip()}
+        if not allowed:
+            return True
+        return email is not None and email.strip().lower() in allowed
+
     # 하루(24시간 슬라이딩 윈도우) 사용자별 LLM 작업 한도.
     daily_upload_limit: int = 5
     daily_diagnosis_limit: int = 5

@@ -91,3 +91,7 @@ class ResetPasswordRequest(BaseModel):
     @classmethod
     def _check_new_password(cls, value: str) -> str:
         return _validated_password(value)
+
+
+class WaitlistRequest(BaseModel):
+    email: EmailStr

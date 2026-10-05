@@ -160,3 +160,10 @@ class AccountPendingDeletionError(AppError):
 
     status_code = 403
     error_code = "ACCOUNT_PENDING_DELETION"
+
+
+class AccessNotAllowedError(AppError):
+    """허용 목록(ACCESS_ALLOWLIST)으로 닫아 둔 환경에 목록 밖 계정이 들어오려 할 때."""
+
+    status_code = 403
+    error_code = "ACCESS_NOT_ALLOWED"

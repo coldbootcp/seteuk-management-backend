@@ -2,6 +2,7 @@ from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import enforce_auth_rate_limit
@@ -22,7 +23,9 @@ from app.schemas.auth import (
     SignupResponse,
     TokenPairResponse,
     VerifyEmailRequest,
+    WaitlistRequest,
 )
+from app.models.waitlist_entry import WaitlistEntry
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -142,3 +145,20 @@ async def reset_password(
 ) -> MessageResponse:
     await auth_service.reset_password(db, data.token, data.new_password)
     return MessageResponse(message="비밀번호가 변경되었습니다. 다시 로그인해주세요")
+
+
+@router.post("/waitlist", response_model=MessageResponse)
+async def join_waitlist(
+    data: WaitlistRequest, request: Request, db: Annotated[AsyncSession, Depends(get_db)]
+) -> MessageResponse:
+    """오픈 전 대기자 메일주소 등록. 이미 남긴 주소여도 같은 응답을 준다."""
+    await enforce_auth_rate_limit(
+        db, f"ip:{_client_ip(request)}", "waitlist", limit=10, window=timedelta(hours=1)
+    )
+    await db.execute(
+        pg_insert(WaitlistEntry)
+        .values(email=data.email.lower())
+        .on_conflict_do_nothing(index_elements=["email"])
+    )
+    await db.commit()
+    return MessageResponse(message="등록했습니다")

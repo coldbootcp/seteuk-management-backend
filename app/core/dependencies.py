@@ -14,7 +14,7 @@ from app.core.exceptions import (
 from app.core.security import TokenType, decode_token
 from app.db.session import get_db
 from app.models.user import User
-from app.services import consultation_service
+from app.services import auth_service, consultation_service
 
 bearer_scheme = HTTPBearer()
 
@@ -28,6 +28,8 @@ async def get_current_user(
     user = await db.scalar(select(User).where(User.id == user_id))
     if user is None:
         raise UserNotFoundError("사용자를 찾을 수 없습니다")
+    # 허용 목록을 켜기 전에 가입해 둔 계정이나 이미 받아 둔 토큰도 여기서 막힌다.
+    auth_service.ensure_email_allowed(user.email)
 
     return user
 
