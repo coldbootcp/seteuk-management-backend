@@ -64,6 +64,17 @@ async def test_transient_failures_give_up_after_three_attempts(monkeypatch) -> N
     assert client.calls == 3
 
 
+async def test_a_truncated_json_response_is_retried(monkeypatch) -> None:
+    """응답이 중간에서 끊겨 JSON이 깨진 것은 스키마 문제가 아니라 일시적인 사정이다."""
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    client = _FakeClient(['{"items": [{"activity_name": "탐', _VALID])
+
+    draft, error = await parse_block(client, "sys", "block-1", "본문")
+
+    assert error is None and draft is not None
+    assert client.calls == 2
+
+
 async def test_malformed_output_is_not_retried(monkeypatch) -> None:
     """스키마에 맞지 않는 응답은 다시 물어도 같은 답이 온다 — 그건 프롬프트
     문제이지 일시적인 사정이 아니다(PARSER_SPEC 2.5)."""

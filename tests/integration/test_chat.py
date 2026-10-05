@@ -166,19 +166,21 @@ async def test_edit_mode_executes_tool_and_records_actions(
             [
                 _chunk(
                     tool_calls=[
-                        _tool_call_delta(0, "call_1", "add_reading", '{"title": "이기적 유전자"'),
+                        _tool_call_delta(
+                            0, "call_1", "add_volunteer_record", '{"place": "지역아동센터"'
+                        ),
                         ]
                 ),
                 _chunk(tool_calls=[_tool_call_delta(0, "", "", ', "grade": 2}')]),
             ],
-            [_chunk("독서 기록에 추가했어요.")],
+            [_chunk("봉사 기록에 추가했어요.")],
         ],
     )
     conversation_id = await _new_conversation(client, auth_headers)
 
     response = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
-        json={"content": "이기적 유전자 읽었어요", "mode": "edit"},
+        json={"content": "지역아동센터에서 봉사했어요", "mode": "edit"},
         headers=auth_headers,
     )
     events = _parse_sse(response.text)
@@ -186,18 +188,18 @@ async def test_edit_mode_executes_tool_and_records_actions(
     assert kinds == ["action", "token", "done"]
 
     action = events[0][1]
-    assert action["tool"] == "add_reading"
+    assert action["tool"] == "add_volunteer_record"
     # 인자가 여러 청크에 쪼개져 와도 하나로 합쳐져야 한다.
-    assert action["arguments"] == {"title": "이기적 유전자", "grade": 2}
+    assert action["arguments"] == {"place": "지역아동센터", "grade": 2}
     assert "error" not in action["result"]
 
-    readings = await client.get("/api/v1/reading-activities", headers=auth_headers)
-    assert readings.json()["items"][0]["title"] == "이기적 유전자"
+    records = await client.get("/api/v1/volunteer-records", headers=auth_headers)
+    assert records.json()["items"][0]["place"] == "지역아동센터"
 
     messages = await client.get(
         f"/api/v1/conversations/{conversation_id}/messages", headers=auth_headers
     )
-    assert messages.json()[1]["applied_actions"][0]["tool"] == "add_reading"
+    assert messages.json()[1]["applied_actions"][0]["tool"] == "add_volunteer_record"
 
 
 async def test_edit_mode_reports_tool_failure_instead_of_crashing(
@@ -324,23 +326,23 @@ async def test_text_before_and_after_a_tool_call_is_kept_separate(
                 _chunk("기록할게요."),
                 _chunk(
                     tool_calls=[
-                        _tool_call_delta(0, "call_1", "add_reading", '{"title": "총, 균, 쇠"}')
+                        _tool_call_delta(0, "call_1", "add_volunteer_record", '{"place": "도서관"}')
                     ]
                 ),
             ],
-            [_chunk("독서 기록에 추가했어요.")],
+            [_chunk("봉사 기록에 추가했어요.")],
         ],
     )
     conversation_id = await _new_conversation(client, auth_headers)
 
     response = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
-        json={"content": "총, 균, 쇠 읽었어요", "mode": "edit"},
+        json={"content": "도서관에서 봉사했어요", "mode": "edit"},
         headers=auth_headers,
     )
     events = _parse_sse(response.text)
     streamed = "".join(data["delta"] for event, data in events if event == "token")
-    assert streamed == "기록할게요.\n\n독서 기록에 추가했어요."
+    assert streamed == "기록할게요.\n\n봉사 기록에 추가했어요."
 
     messages = await client.get(
         f"/api/v1/conversations/{conversation_id}/messages", headers=auth_headers
@@ -391,7 +393,7 @@ async def test_tool_actions_survive_a_stream_failure(
             yield _chunk(
                 tool_calls=[
                     _tool_call_delta(
-                        0, "call_1", "add_reading", '{"title": "코스모스", "grade": 2}'
+                        0, "call_1", "add_volunteer_record", '{"place": "도서관", "grade": 2}'
                     )
                 ]
             )
@@ -404,15 +406,15 @@ async def test_tool_actions_survive_a_stream_failure(
 
     response = await client.post(
         f"/api/v1/conversations/{conversation_id}/messages",
-        json={"content": "코스모스 읽었어요", "mode": "edit"},
+        json={"content": "도서관에서 봉사했어요", "mode": "edit"},
         headers=auth_headers,
     )
     events = _parse_sse(response.text)
     assert [e for e, _ in events][-1] == "error"
 
-    # 독서 기록은 실제로 만들어졌다.
-    readings = await client.get("/api/v1/reading-activities", headers=auth_headers)
-    assert [r["title"] for r in readings.json()["items"]] == ["코스모스"]
+    # 봉사 기록은 실제로 만들어졌다.
+    records = await client.get("/api/v1/volunteer-records", headers=auth_headers)
+    assert [r["place"] for r in records.json()["items"]] == ["도서관"]
 
     # 그리고 그 사실이 대화에도 남아 있다.
     messages = (
@@ -422,4 +424,4 @@ async def test_tool_actions_survive_a_stream_failure(
     ).json()
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == "기록할게요."
-    assert [a["tool"] for a in messages[-1]["applied_actions"]] == ["add_reading"]
+    assert [a["tool"] for a in messages[-1]["applied_actions"]] == ["add_volunteer_record"]

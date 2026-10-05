@@ -281,3 +281,193 @@ def parse_academic_performance(section_text: str) -> list[AcademicPerformanceIte
         )
 
     return items
+
+
+# --- 셀 좌표 기반 읽기 ------------------------------------------------------
+# 새 서식은 학기를 열이 아니라 "행"으로 둔다(학기 | 교과 | 과목 | 단위수 | 원점수 | …).
+# 위의 텍스트 방식은 같은 과목의 1·2학기 값이 옆에 이어 붙는 옛 서식을 전제해서, 이 서식에서는
+# 2학기 성적이 1학기로 붙고 과목명이 깨졌다(실제 생기부에서 3학년 성적이 4건뿐이었다).
+# 표는 학기 행마다 셀 격자가 온전하므로, 각 셀 안의 글자를 좌표로 가져와 단위수 줄을 기준으로
+# 같은 과목의 칸들을 묶는다. 과목명이 두 줄로 접혀도(예: "심화 영어 독해 / Ⅰ") 기준줄에서 가장
+# 가까운 줄로 붙는다.
+
+_GRADE_TITLE = re.compile(r"\[\s*(\d)\s*학년\s*\]")
+_SCORE_CELL = re.compile(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)(?:\(\s*(\d+(?:\.\d+)?)\s*\))?")
+_ACHIEVEMENT_CELL = re.compile(r"^([A-EP])(?:\((\d+)\))?$")
+
+
+def _official_subject_names() -> dict[str, str]:
+    from app.services.subject_catalog import SUBJECTS, normalize
+
+    names: dict[str, str] = {}
+    for subject in SUBJECTS:
+        names.setdefault(normalize(subject.name), subject.name)
+    return names
+
+
+def _column_keys(header_texts: list[str]) -> dict[str, int]:
+    keys: dict[str, int] = {}
+    for index, raw in enumerate(header_texts):
+        text = re.sub(r"\s+", "", raw or "")
+        if text == "학기":
+            keys["semester"] = index
+        elif text == "교과":
+            keys["category"] = index
+        elif text == "과목":
+            keys["subject"] = index
+        elif text.startswith("단위수"):
+            keys["units"] = index
+        elif text.startswith("원점수"):
+            keys["score"] = index
+        elif text.startswith("성취도별"):
+            continue  # 분포비율 — 저장하지 않는다.
+        elif text.startswith("성취도"):
+            keys["achievement"] = index
+        elif text.startswith("석차등급"):
+            keys["rank"] = index
+    return keys
+
+
+def _lines_in(words: list[dict], bbox: tuple[float, float, float, float]) -> list[dict]:
+    """셀 안의 글자를 줄 단위로 묶는다(같은 줄은 위치가 거의 같다)."""
+    x0, top, x1, bottom = bbox
+    inside = [
+        w
+        for w in words
+        if x0 - 1 <= (w["x0"] + w["x1"]) / 2 <= x1 + 1
+        and top - 1 <= (w["top"] + w["bottom"]) / 2 <= bottom + 1
+    ]
+    inside.sort(key=lambda w: (round(w["top"]), w["x0"]))
+    lines: list[dict] = []
+    for word in inside:
+        center = (word["top"] + word["bottom"]) / 2
+        if lines and abs(lines[-1]["center"] - center) < 2.5:
+            lines[-1]["words"].append(word["text"])
+        else:
+            lines.append({"center": center, "words": [word["text"]]})
+    for line in lines:
+        line["text"] = " ".join(line["words"])
+    return lines
+
+
+def _gather(
+    words: list[dict],
+    cells: list,
+    keys: dict[str, int],
+    anchors: list[dict],
+    key: str,
+) -> list[list[str]]:
+    """한 열의 줄들을, 세로로 가장 가까운 기준줄(단위수 줄)의 과목에 붙인다."""
+    per_anchor: list[list[str]] = [[] for _ in anchors]
+    if key not in keys:
+        return per_anchor
+    for line in _lines_in(words, cells[keys[key]]):
+        nearest = min(
+            range(len(anchors)),
+            key=lambda i: abs(anchors[i]["center"] - line["center"]),
+        )
+        per_anchor[nearest].append(line["text"])
+    return per_anchor
+
+
+def parse_academic_performance_from_layout(pdf_bytes: bytes) -> list[AcademicPerformanceItem]:
+    import io
+
+    import pdfplumber
+
+    from app.services.subject_catalog import normalize
+
+    official = _official_subject_names()
+    items: list[AcademicPerformanceItem] = []
+    grade: int | None = None
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            words = None
+            for table in page.find_tables():
+                data = table.extract()
+                for row in data[:3]:
+                    match = _GRADE_TITLE.search(" ".join(c or "" for c in row))
+                    if match:
+                        grade = int(match.group(1))
+                        break
+                header_index = next(
+                    (
+                        i
+                        for i, row in enumerate(data[:4])
+                        if {"학기", "과목", "단위수"}
+                        <= {re.sub(r"\s+", "", c or "")[:3] for c in row}
+                        or (
+                            any(re.sub(r"\s+", "", c or "") == "학기" for c in row)
+                            and any(re.sub(r"\s+", "", c or "") == "과목" for c in row)
+                        )
+                    ),
+                    None,
+                )
+                if header_index is None or grade is None:
+                    continue
+                keys = _column_keys(data[header_index])
+                if not {"semester", "subject", "units"} <= keys.keys():
+                    continue
+                if words is None:
+                    words = page.extract_words()
+
+                for row in table.rows[header_index + 1 :]:
+                    if not row.cells or any(cell is None for cell in row.cells):
+                        continue  # "이수단위 합계" 같이 칸이 합쳐진 줄
+                    cells = row.cells
+                    sem_lines = _lines_in(words, cells[keys["semester"]])
+                    sem_text = "".join(line["text"] for line in sem_lines).strip()
+                    if not sem_text.isdigit():
+                        continue
+                    semester = int(sem_text)
+                    anchors = [
+                        line
+                        for line in _lines_in(words, cells[keys["units"]])
+                        if line["text"].strip().isdigit()
+                    ]
+                    if not anchors:
+                        continue
+
+                    categories = _gather(words, cells, keys, anchors, "category")
+                    subjects = _gather(words, cells, keys, anchors, "subject")
+                    scores = _gather(words, cells, keys, anchors, "score")
+                    achievements = _gather(words, cells, keys, anchors, "achievement")
+                    ranks = _gather(words, cells, keys, anchors, "rank")
+
+                    for i, anchor in enumerate(anchors):
+                        subject_text = " ".join(subjects[i]).strip()
+                        if not subject_text:
+                            continue
+                        subject = official.get(normalize(subject_text), subject_text)
+                        category = "".join(categories[i]).replace("・", "·").replace(
+                            " ", ""
+                        ) or infer_category(subject)
+                        score_match = _SCORE_CELL.search("".join(scores[i]).replace(" ", ""))
+                        achievement_text = "".join(achievements[i]).replace(" ", "")
+                        achievement_match = _ACHIEVEMENT_CELL.match(achievement_text)
+                        rank_text = "".join(ranks[i]).strip()
+                        items.append(
+                            AcademicPerformanceItem(
+                                grade=grade,
+                                semester=semester,
+                                category=category,
+                                subject=subject,
+                                units=int(anchor["text"]),
+                                achievement_grade=achievement_match.group(1)
+                                if achievement_match
+                                else None,
+                                student_count=int(achievement_match.group(2))
+                                if achievement_match and achievement_match.group(2)
+                                else None,
+                                raw_score=float(score_match.group(1)) if score_match else None,
+                                subject_average=float(score_match.group(2))
+                                if score_match
+                                else None,
+                                std_deviation=float(score_match.group(3))
+                                if score_match and score_match.group(3)
+                                else None,
+                                rank=rank_text if rank_text.isdigit() else None,
+                            )
+                        )
+    return items

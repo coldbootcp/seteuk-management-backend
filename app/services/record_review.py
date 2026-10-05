@@ -30,8 +30,6 @@ from app.core.exceptions import LLMUnavailableError
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
-from app.models.award import Award
-from app.models.reading_activity import ReadingActivity
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.seteuk import (
@@ -48,8 +46,6 @@ logger = logging.getLogger(__name__)
 SECTIONS = (
     "attendance",
     "academic_performance",
-    "reading_activities",
-    "awards",
     "volunteer_records",
     "activities",
 )
@@ -87,13 +83,11 @@ def detect_anomalies(
     """
     anomalies: list[RecordAnomaly] = []
 
-    if result.student_name and user.name and _compact(result.student_name) != _compact(user.name):
+    if result.name_matches_account is False:
         anomalies.append(
             RecordAnomaly(
                 kind="name_mismatch",
-                message=(
-                    f"생기부의 성명은 '{result.student_name}'인데 계정 이름은 '{user.name}'입니다."
-                ),
+                message="생기부의 성명이 계정 이름과 다릅니다.",
             )
         )
 
@@ -160,9 +154,7 @@ def detect_anomalies(
 def _latest_period(result: SeteukAnalysisResult) -> tuple[int, int | None] | None:
     periods = (
         [(i.grade, i.semester) for i in result.academic_performance]
-        + [(i.grade, i.semester) for i in result.reading_activities]
         + [(i.grade, i.semester) for i in result.activities]
-        + [(i.grade, i.semester) for i in result.awards if i.grade is not None]
         + [(i.grade, None) for i in result.attendance]
         + [(i.grade, None) for i in result.volunteer_records]
     )
@@ -296,29 +288,13 @@ async def compare_with_student_records(
                 )
             )
 
-    # 출결·독서·수상·봉사 — 같은 것이 이미 있으면 넣지 않는다(내용 비교까지는 하지 않는다).
+    # 출결·봉사 — 같은 것이 이미 있으면 넣지 않는다(내용 비교까지는 하지 않는다).
     attendance_grades = {row.grade for row in await _manual_rows(db, user.id, Attendance)}
     for index, item in enumerate(filtered.attendance):
         if item.grade in attendance_grades:
             skip("attendance")
         else:
             plan["attendance"].append(index)
-
-    readings = {
-        (row.grade, _compact(row.title)) for row in await _manual_rows(db, user.id, ReadingActivity)
-    }
-    for index, item in enumerate(filtered.reading_activities):
-        if (item.grade, _compact(item.title)) in readings:
-            skip("reading_activities")
-        else:
-            plan["reading_activities"].append(index)
-
-    awards = {(_compact(row.name), row.date) for row in await _manual_rows(db, user.id, Award)}
-    for index, item in enumerate(filtered.awards):
-        if (_compact(item.name), item.date) in awards:
-            skip("awards")
-        else:
-            plan["awards"].append(index)
 
     volunteer = {
         (row.grade, row.date, row.hours)

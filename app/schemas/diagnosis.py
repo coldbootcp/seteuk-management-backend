@@ -54,18 +54,17 @@ class GradesTrend(BaseModel):
     overall: list[GradesTrendPoint] = []
 
 
-# --- 학기별 평가 섹션 — 학기당 1회 LLM 호출, 성적/독서/활동 3개 독립 텍스트 ---
+# --- 학기별 평가 섹션 — 학기당 1회 LLM 호출, 성적/활동 2개 독립 텍스트 ---
 
 
 class SemesterReview(BaseModel):
     grade: int
     semester: int
     grades_review: str
-    reading_review: str
     activities_review: str
 
 
-# --- 진로 유기적 평가 섹션 — 활동/수상/봉사를 아우르는 하나의 사슬(완료+제안) ---
+# --- 진로 유기적 평가 섹션 — 활동/봉사를 아우르는 하나의 사슬(완료+제안) ---
 
 
 class CareerThreadEntry(BaseModel):
@@ -162,7 +161,6 @@ class SemesterReviewDraft(BaseModel):
     """학기별 평가 산출물 — grade/semester는 LLM이 아니라 파이프라인이 붙인다."""
 
     grades_review: str
-    reading_review: str
     activities_review: str
 
 

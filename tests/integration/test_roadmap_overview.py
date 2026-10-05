@@ -126,7 +126,7 @@ async def test_roadmap_overview_without_diagnosis_still_shows_plans(
     await client.post(
         "/api/v1/plans",
         json={
-            "item_type": "reading",
+            "item_type": "activity",
             "title": "미리 세운 계획",
             "target_grade": 2,
             "target_semester": 2,

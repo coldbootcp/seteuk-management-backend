@@ -50,7 +50,6 @@ async def _fake_call_structured(system_prompt: str, user_content: str, response_
     if response_model is SemesterReviewDraft:
         return SemesterReviewDraft(
             grades_review="이 학기 성적 평가입니다.",
-            reading_review="이 학기 독서 평가입니다.",
             activities_review="이 학기 활동 평가입니다.",
         )
     if response_model is CareerThreadDraft:
@@ -230,7 +229,7 @@ async def test_diagnosis_end_to_end(client: AsyncClient, auth_headers: dict[str,
     review = body["semester_reviews"][0]
     assert review["grade"] == 1 and review["semester"] == 1
     assert review["grades_review"] == "이 학기 성적 평가입니다."
-    assert review["reading_review"] == "이 학기 독서 평가입니다."
+    assert "reading_review" not in review
     assert review["activities_review"] == "이 학기 활동 평가입니다."
 
     # 진로 유기적 평가

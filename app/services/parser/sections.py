@@ -33,12 +33,23 @@ _NAME_PATTERNS.append(
 )
 
 
+# 새 서식은 인적사항과 학적사항을 "1. 인적·학적사항" 한 구역으로 합쳐 낸다.
+_COMBINED_PERSONAL = re.compile(
+    r"^\d+\.\s*" + _spaced("인적") + r"\s*[·ㆍ・･.]?\s*" + _spaced("학적사항") + r"\s*$",
+    re.MULTILINE,
+)
+
+
 def split_sections(text: str) -> dict[str, str]:
     matches: list[tuple[str, re.Match[str]]] = []
     for name, pattern in _NAME_PATTERNS:
         match = pattern.search(text)
         if match:
             matches.append((name, match))
+
+    combined = _COMBINED_PERSONAL.search(text)
+    if combined:
+        matches.append(("인적·학적사항", combined))
 
     matches.sort(key=lambda pair: pair[1].start())
 
@@ -47,4 +58,9 @@ def split_sections(text: str) -> dict[str, str]:
         start = match.end()
         end = matches[i + 1][1].start() if i + 1 < len(matches) else len(text)
         sections[name] = text[start:end].strip()
+    # 합쳐진 구역은 두 파서(성명·입학 연도)가 각자 자기 이름으로 찾는다.
+    if "인적·학적사항" in sections:
+        combined_text = sections.pop("인적·학적사항")
+        sections.setdefault("인적사항", combined_text)
+        sections.setdefault("학적사항", combined_text)
     return sections

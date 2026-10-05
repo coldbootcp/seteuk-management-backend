@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -10,14 +11,13 @@ from app.db.session import AsyncSessionLocal
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
-from app.models.award import Award
-from app.models.reading_activity import ReadingActivity
 from app.models.seteuk_upload import SeteukUpload, UploadMode, UploadStatus
 from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.seteuk import ParseError, RecordReview, SeteukAnalysisResult
 from app.services import record_review
 from app.services.parser.pipeline import parse_seteuk_pdf
+from app.services.parser.redact import redact_pdf
 
 
 async def create_upload(
@@ -33,14 +33,19 @@ async def create_upload(
     판단으로 뒤집었다. 원본은 파싱 결과와 달리 진단·챗봇 컨텍스트에 절대 싣지 않는다."""
     if not file_bytes.startswith(b"%PDF"):
         raise UnsupportedFileError("텍스트 PDF만 지원합니다")
+    # 보관하는 것은 개인정보를 지운 PDF뿐이다. 지우지 못하면 원본을 저장하지 않고 실패시킨다.
+    try:
+        stored_bytes, _ = redact_pdf(file_bytes)
+    except Exception as exc:
+        raise UnsupportedFileError("개인정보를 가리는 데 실패해 저장하지 못했습니다") from exc
 
     upload = SeteukUpload(
         user_id=user_id,
         status=UploadStatus.PROCESSING.value,
         file_name=file_name,
         content_type=content_type,
-        size_bytes=len(file_bytes),
-        content=file_bytes,
+        size_bytes=len(stored_bytes),
+        content=stored_bytes,
         mode=mode.value,
     )
     db.add(upload)
@@ -72,17 +77,13 @@ async def _keep_only_this_upload(
             .values(source_upload_id=upload_id)
         )
     await db.execute(
-        delete(SeteukUpload).where(
-            SeteukUpload.user_id == user_id, SeteukUpload.id != upload_id
-        )
+        delete(SeteukUpload).where(SeteukUpload.user_id == user_id, SeteukUpload.id != upload_id)
     )
 
 
 _SETEUK_DOMAIN_MODELS = (
     Attendance,
     AcademicPerformance,
-    ReadingActivity,
-    Award,
     VolunteerRecord,
     Activity,
 )
@@ -92,8 +93,6 @@ _SETEUK_DOMAIN_MODELS = (
 _SECTION_MODELS: dict[str, type] = {
     "attendance": Attendance,
     "academic_performance": AcademicPerformance,
-    "reading_activities": ReadingActivity,
-    "awards": Award,
     "volunteer_records": VolunteerRecord,
     "activities": Activity,
 }
@@ -132,7 +131,13 @@ def _expected_period_from_freshman_year(
     9~2월), 계산상 4학년 이상이 나오면(=졸업) 문서도 3학년을 넘을 수 없으므로
     3으로 묶는다 — 프론트엔드가 "졸업"을 grade=3으로 보내는 것과 같은 규칙이다."""
     academic_year_now = today.year if today.month >= 3 else today.year - 1
-    grade = min(max(academic_year_now - freshman_academic_year + 1, 1), 3)
+    years_since_entry = academic_year_now - freshman_academic_year + 1
+    if years_since_entry > 3:
+        # 졸업생의 생기부는 3학년 2학기까지 확정돼 있다. 오늘 달로 학기를 정하면 3~8월에는
+        # 3학년 1학기가 되어, 3학년 2학기 기록을 가진 졸업생 생기부가 "다른 사람 것"으로
+        # 반려된다.
+        return 3, 2
+    grade = max(years_since_entry, 1)
     semester = 1 if 3 <= today.month <= 8 else 2
     return grade, semester
 
@@ -146,10 +151,8 @@ def _max_document_period(result: SeteukAnalysisResult) -> tuple[int, int | None]
     periods: list[tuple[int, int | None]] = (
         [(item.grade, None) for item in result.attendance]
         + [(item.grade, item.semester) for item in result.academic_performance]
-        + [(item.grade, item.semester) for item in result.reading_activities]
         + [(item.grade, None) for item in result.volunteer_records]
         + [(item.grade, item.semester) for item in result.activities]
-        + [(item.grade, item.semester) for item in result.awards if item.grade is not None]
     )
     if not periods:
         return None
@@ -169,9 +172,7 @@ def _filter_future_grade_data(
     학년-학기를 갱신하지 않은 채 더 최신 생기부를 다시 올린 경우, 아직
     일어나지 않았어야 할 시점의 기록이 파싱돼 진단·로드맵이 "현재 위치"를
     잘못 판단하게 된다. 온보딩 전(current_grade가 아직 없음)이면 비교 기준이
-    없으므로 거르지 않는다. 수상은 표에 학년 열이 없지만 참가대상과 수상연월일로
-    파싱 시점에 학년-학기를 채우므로(parse_awards), 판정된 행은 함께 거른다 —
-    끝내 판정하지 못한 행만 근거가 없어 남겨 둔다."""
+    없으므로 거르지 않는다.."""
     if current_grade is None:
         return result
 
@@ -192,12 +193,7 @@ def _filter_future_grade_data(
 
     attendance = _filter(result.attendance, lambda i: (i.grade, None))
     academic_performance = _filter(result.academic_performance, lambda i: (i.grade, i.semester))
-    reading_activities = _filter(result.reading_activities, lambda i: (i.grade, i.semester))
     volunteer_records = _filter(result.volunteer_records, lambda i: (i.grade, None))
-    # 학년을 끝내 읽어내지 못한 수상은 거를 근거가 없으므로 통과시킨다.
-    awards = _filter(
-        result.awards, lambda i: (i.grade, i.semester) if i.grade is not None else (0, None)
-    )
     activities = _filter(result.activities, lambda i: (i.grade, i.semester))
 
     errors = list(result.errors)
@@ -217,12 +213,10 @@ def _filter_future_grade_data(
     return SeteukAnalysisResult(
         # 걸러내기는 기록만 덜어 낸다 — 인적사항의 성명과 학적사항이 밝힌 기준점은
         # 그대로 가져간다.
-        student_name=result.student_name,
+        name_matches_account=result.name_matches_account,
         freshman_academic_year=result.freshman_academic_year,
         attendance=attendance,
         academic_performance=academic_performance,
-        reading_activities=reading_activities,
-        awards=awards,
         volunteer_records=volunteer_records,
         activities=activities,
         errors=errors,
@@ -238,14 +232,28 @@ def _persist_result(
         db.add(
             AcademicPerformance(user_id=user_id, source_upload_id=upload_id, **item.model_dump())
         )
-    for item in result.reading_activities:
-        db.add(ReadingActivity(user_id=user_id, source_upload_id=upload_id, **item.model_dump()))
-    for item in result.awards:
-        db.add(Award(user_id=user_id, source_upload_id=upload_id, **item.model_dump()))
     for item in result.volunteer_records:
         db.add(VolunteerRecord(user_id=user_id, source_upload_id=upload_id, **item.model_dump()))
     for item in result.activities:
         db.add(Activity(user_id=user_id, source_upload_id=upload_id, **item.model_dump()))
+
+
+def _has_graduated(freshman_academic_year: int, today: date) -> bool:
+    """입학 후 3개 학년도가 모두 지났는지 — 3월에 새 학년도가 시작한다."""
+    academic_year_now = today.year if today.month >= 3 else today.year - 1
+    return academic_year_now - freshman_academic_year + 1 > 3
+
+
+def _seal_student_name(result: SeteukAnalysisResult, user: User | None) -> SeteukAnalysisResult:
+    """성명은 계정 이름과 대조한 결과만 남기고 값은 버린다(저장하지 않는다)."""
+    matches: bool | None = None
+    if result.student_name and user is not None and user.name:
+        matches = _compact_name(result.student_name) == _compact_name(user.name)
+    return result.model_copy(update={"student_name": None, "name_matches_account": matches})
+
+
+def _compact_name(name: str) -> str:
+    return re.sub(r"\s+", "", name)
 
 
 async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
@@ -264,6 +272,22 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
         try:
             result = await parse_seteuk_pdf(pdf_bytes)
             user = await db.get(User, upload.user_id)
+            result = _seal_student_name(result, user)
+
+            # 졸업생의 생기부는 아직 받지 않는다(소유자 결정). 문서가 밝힌 입학 연도를 먼저
+            # 보고, 못 읽었으면 프로필의 입학 연도로 판단한다.
+            today = datetime.now(UTC).date()
+            entry_year = result.freshman_academic_year or (
+                user.freshman_academic_year if user else None
+            )
+            if entry_year is not None and _has_graduated(entry_year, today):
+                upload.status = UploadStatus.FAILED.value
+                upload.failure_reason = (
+                    f"{entry_year}학년도에 입학한 학생은 이미 졸업했습니다. 졸업생의 생기부는"
+                    " 아직 지원하지 않습니다."
+                )
+                await db.commit()
+                return
             current_semester = user.current_semester if user else None
             current_grade = user.current_grade if user else None
             freshman_year = user.freshman_academic_year if user else None
@@ -427,9 +451,7 @@ async def get_result(
     result = SeteukAnalysisResult.model_validate(upload.raw_result)
     user = await db.get(User, user_id)
     if user and user.current_grade is not None:
-        result = _filter_future_grade_data(
-            result, user.current_grade, user.current_semester
-        )
+        result = _filter_future_grade_data(result, user.current_grade, user.current_semester)
     return result
 
 
@@ -451,8 +473,6 @@ class ImportSelection:
 
     attendance: list[int] | None = None
     academic_performance: list[int] | None = None
-    reading_activities: list[int] | None = None
-    awards: list[int] | None = None
     volunteer_records: list[int] | None = None
     activities: list[int] | None = None
     # (영역, index) -> 학생이 고친 (학년, 학기).
@@ -511,9 +531,7 @@ async def import_result(
     user = await db.get(User, user_id)
     raw = SeteukAnalysisResult.model_validate(upload.raw_result)
     if user and user.current_grade is not None:
-        raw = _filter_future_grade_data(
-            raw, user.current_grade, user.current_semester
-        )
+        raw = _filter_future_grade_data(raw, user.current_grade, user.current_semester)
 
     parsed = _apply_period_overrides(raw, selection)
 
@@ -526,9 +544,7 @@ async def import_result(
 
     # 어떤 영역을 이번에 반영하는지. 아무것도 지정하지 않았으면 "전부 반영"이고,
     # 일부만 지정했으면 그 영역만 손댄다 — 나머지는 앞서 반영한 것을 그대로 둔다.
-    specified = [
-        name for name in _SECTION_MODELS if getattr(selection, name, None) is not None
-    ]
+    specified = [name for name in _SECTION_MODELS if getattr(selection, name, None) is not None]
     # 출결은 검토 화면에 나오지 않는다 — 학생이 고르거나 고칠 대상이 아니고,
     # 화면 어디에도 노출하지 않기로 한 자료다(챗봇만 참고한다). 그래서 선택에
     # 실려 오지 않는데, 지정되지 않은 영역은 반영에서 빠지므로 어느 경로로도
@@ -540,8 +556,6 @@ async def import_result(
     chosen = SeteukAnalysisResult(
         attendance=_pick(parsed.attendance, selection.attendance),
         academic_performance=_pick(parsed.academic_performance, selection.academic_performance),
-        reading_activities=_pick(parsed.reading_activities, selection.reading_activities),
-        awards=_pick(parsed.awards, selection.awards),
         volunteer_records=_pick(parsed.volunteer_records, selection.volunteer_records),
         activities=_pick(parsed.activities, selection.activities),
         errors=parsed.errors,
@@ -564,8 +578,6 @@ async def import_result(
     return {
         "attendance": len(chosen.attendance),
         "academic_performance": len(chosen.academic_performance),
-        "reading_activities": len(chosen.reading_activities),
-        "awards": len(chosen.awards),
         "volunteer_records": len(chosen.volunteer_records),
         "activities": len(chosen.activities),
     }

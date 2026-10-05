@@ -10,10 +10,10 @@ def extract_text(pdf_bytes: bytes) -> str:
         return "\n".join(page.get_text() for page in doc)
 
 
-def extract_tables(pdf_bytes: bytes) -> list[list[list[str | None]]]:
+def extract_tables(pdf_bytes: bytes, max_pages: int | None = None) -> list[list[list[str | None]]]:
     tables: list[list[list[str | None]]] = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
+        for page in pdf.pages[:max_pages]:
             tables.extend(page.extract_tables())
     return tables
 

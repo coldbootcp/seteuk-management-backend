@@ -108,7 +108,7 @@ async def test_plan_crud_and_filters(client: AsyncClient, auth_headers: dict[str
     created = await client.post(
         "/api/v1/plans",
         json={
-            "item_type": "reading",
+            "item_type": "activity",
             "title": "이기적 유전자 읽기",
             "target_grade": 2,
             "target_semester": 2,
@@ -196,27 +196,17 @@ async def test_completing_activity_plan_promotes_it_and_keeps_lineage(
     assert again.json()["error_code"] == "INVALID_PLAN_TRANSITION"
 
 
-async def test_completing_reading_plan_creates_reading_row(
+async def test_removed_plan_types_are_rejected(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    await _onboard(client, auth_headers)
-    plan = await client.post(
-        "/api/v1/plans",
-        json={"item_type": "reading", "title": "총, 균, 쇠", "target_grade": 3},
-        headers=auth_headers,
-    )
-    completed = await client.post(
-        f"/api/v1/plans/{plan.json()['id']}/complete",
-        json={"author": "재레드 다이아몬드"},
-        headers=auth_headers,
-    )
-    assert completed.json()["created_reading_id"] is not None
-
-    readings = await client.get("/api/v1/reading-activities", headers=auth_headers)
-    item = readings.json()["items"][0]
-    assert item["title"] == "총, 균, 쇠"
-    assert item["author"] == "재레드 다이아몬드"
-    assert item["grade"] == 3
+    """독서·수상은 서비스에서 없앴다 — 계획 유형으로도 만들 수 없다."""
+    for removed in ("reading", "award"):
+        response = await client.post(
+            "/api/v1/plans",
+            json={"item_type": removed, "title": "없어진 유형", "target_grade": 3},
+            headers=auth_headers,
+        )
+        assert response.status_code == 422, removed
 
 
 async def test_roadmap_creates_plan_items_for_remaining_semesters(
@@ -242,7 +232,7 @@ async def test_roadmap_regeneration_keeps_user_plans(
     await _onboard(client, auth_headers)
     await client.post(
         "/api/v1/plans",
-        json={"item_type": "reading", "title": "내가 직접 세운 계획", "target_grade": 2,
+        json={"item_type": "activity", "title": "내가 직접 세운 계획", "target_grade": 2,
               "target_semester": 2},
         headers=auth_headers,
     )

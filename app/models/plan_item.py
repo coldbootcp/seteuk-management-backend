@@ -11,15 +11,13 @@ from app.db.base import Base
 
 
 class PlanItemType(StrEnum):
-    """어느 탭에 속한 계획인지. 활동/독서/수행평가처럼 완료 시 실제 기록 행으로
+    """어느 탭에 속한 계획인지. 활동/수행평가처럼 완료 시 실제 기록 행으로
     승격되는 타입과, 성적 목표처럼 승격 대상이 없는 타입이 섞여 있다."""
 
     ACTIVITY = "activity"
-    READING = "reading"
     ASSESSMENT = "assessment"
     GRADE = "grade"
     VOLUNTEER = "volunteer"
-    AWARD = "award"
     OTHER = "other"
 
 
@@ -98,12 +96,9 @@ class PlanItem(Base):
     source_recommendation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("recommendations.id", ondelete="SET NULL"), nullable=True
     )
-    # 완료 처리로 승격된 기록 행. item_type에 따라 둘 중 하나만 채워진다.
+    # 완료 처리로 승격된 기록 행. 
     completed_activity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
-    )
-    completed_reading_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("reading_activities.id", ondelete="SET NULL"), nullable=True
     )
     keywords: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(

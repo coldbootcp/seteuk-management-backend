@@ -14,8 +14,8 @@ ROADMAP_SYSTEM_PROMPT = """너는 대한민국 고등학생의 3년 학교생활
    이것을 해야 하는지, 직전 학기와 어떻게 이어지는지를 설명하라.
 3. items는 학기당 2~4개. 학생의 제약 조건(시간, 학원 등)을 무시하고 과도하게 많이
    제안하지 마라.
-4. item_type은 activity(탐구/프로젝트), reading(독서), assessment(수행평가),
-   grade(성적 목표), volunteer(봉사), award(대회), other 중 하나다.
+4. item_type은 activity(탐구/프로젝트), assessment(수행평가),
+   grade(성적 목표), volunteer(봉사), other 중 하나다.
 5. 어떤 계획이 과거의 특정 활동을 잇는 것이라면 source_activity_index에 그 활동의
    index(정수)를 그대로 넣어라. activity_id가 아니다. 주어진 목록에 없는 번호를
    지어내지 말고, 이어지는 활동이 없으면 null로 둬라.

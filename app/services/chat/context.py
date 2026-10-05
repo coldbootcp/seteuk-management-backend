@@ -17,11 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
 from app.models.attendance import Attendance
-from app.models.award import Award
 from app.models.calendar_event import CalendarEvent
 from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.models.plan_item import PlanItem, PlanItemStatus
-from app.models.reading_activity import ReadingActivity
 from app.models.seteuk_upload import SeteukUpload, UploadStatus
 from app.models.timetable import Timetable
 from app.models.user import User
@@ -33,8 +31,6 @@ from app.services.subject_catalog import get_subject
 from app.services.subject_contents import get_content
 
 MAX_ACTIVITIES = 80
-MAX_READINGS = 40
-MAX_AWARDS = 30
 MAX_VOLUNTEER = 20
 MAX_GRADES = 60
 MAX_PLANS = 40
@@ -173,14 +169,6 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             .limit(MAX_ACTIVITIES)
         )
     )
-    readings = list(
-        await db.scalars(
-            select(ReadingActivity)
-            .where(ReadingActivity.user_id == user.id)
-            .order_by(ReadingActivity.grade.desc())
-            .limit(MAX_READINGS)
-        )
-    )
     grades = list(
         await db.scalars(
             select(AcademicPerformance)
@@ -231,17 +219,6 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
                 current_course_entries.append(
                     _course_entry(name, slot.get("group") or "기타", slot.get("subject_code"))
                 )
-    # 상한에 걸릴 때 어떤 행이 남는지가 정렬에 달려 있다. ORDER BY가 없으면 DB가
-    # 임의로 고른 30건이 실려, 같은 질문에 매번 다른 근거를 드는 챗봇이 된다.
-    # 다른 영역과 마찬가지로 최신 것부터 남긴다.
-    awards = list(
-        await db.scalars(
-            select(Award)
-            .where(Award.user_id == user.id)
-            .order_by(Award.date.desc().nullslast(), Award.created_at.desc())
-            .limit(MAX_AWARDS)
-        )
-    )
     volunteer = list(
         await db.scalars(
             select(VolunteerRecord)
@@ -363,12 +340,6 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
             }
             for g in grades
         ],
-        "readings": [
-            {"grade": r.grade, "semester": r.semester, "title": r.title, "author": r.author}
-            for r in readings
-        ],
-        "awards": [{"name": a.name, "rank": a.rank, "date": a.date.isoformat() if a.date else None}
-                   for a in awards],
         "volunteer_records": [
             {
                 "grade": v.grade,
@@ -411,9 +382,7 @@ async def build_context(db: AsyncSession, user: User) -> dict[str, Any]:
         # 상한에 걸려 잘렸는지 챗봇이 알 수 있도록 전체 개수를 함께 준다.
         "counts": {
             "activities": await _count(db, Activity, user.id),
-            "readings": await _count(db, ReadingActivity, user.id),
             "academic_performance": await _count(db, AcademicPerformance, user.id),
-            "awards": await _count(db, Award, user.id),
             "volunteer_records": await _count(db, VolunteerRecord, user.id),
             "plans": await _count(db, PlanItem, user.id),
         },

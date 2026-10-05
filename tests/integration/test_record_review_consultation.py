@@ -50,7 +50,7 @@ async def _stopped_upload(
         monkeypatch,
         SeteukAnalysisResult(
             student_name="홍길 동",  # 공백만 다르면 같은 이름이다
-            freshman_academic_year=2020,  # 계정과 다른 입학 연도 → 이상
+            freshman_academic_year=2024,  # 계정과 다른 입학 연도(졸업 전) → 이상
             academic_performance=[_grade(1, 1, "공통수학1"), _grade(1, 2, "공통수학2", "B")],
         ),
     )

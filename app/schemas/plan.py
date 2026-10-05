@@ -56,7 +56,6 @@ class PlanItemRead(BaseModel):
     source_activity_id: uuid.UUID | None
     source_recommendation_id: uuid.UUID | None
     completed_activity_id: uuid.UUID | None
-    completed_reading_id: uuid.UUID | None
     keywords: list[str]
     created_at: datetime
     updated_at: datetime
@@ -73,13 +72,11 @@ class PlanItemCompleteRequest(BaseModel):
     activity_category: ActivityCategory | None = None
     activity_type: ActivityType | None = None
     description: str | None = None
-    author: str | None = None
 
 
 class PlanItemCompleteResponse(BaseModel):
     plan_item: PlanItemRead
     created_activity_id: uuid.UUID | None = None
-    created_reading_id: uuid.UUID | None = None
 
 
 class RoadmapGenerateRequest(BaseModel):

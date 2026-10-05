@@ -109,7 +109,7 @@ NARRATIVE_STAGES: list[NarrativeStage] = [
 # "생기부 연동" 안내를 하드코딩하면, 직접 기록만으로 쓰는 학생에게 맞지 않는다.
 RETROSPECT_STAGE = "회고"
 RETROSPECT_TITLE = "지난 학기 기록"
-RETROSPECT_OBJECTIVE = "이 시기에 남긴 활동·성적·독서·수상·봉사 기록이 여기에 모입니다."
+RETROSPECT_OBJECTIVE = "이 시기에 남긴 활동·성적·봉사 기록이 여기에 모입니다."
 
 
 def active_index(grade: int, semester: int) -> int:

@@ -23,7 +23,6 @@ from app.models import application_preparation as _application_preparation  # no
 from app.models import attendance as _attendance  # noqa: E402, F401
 from app.models import auth_rate_limit_event as _auth_rate_limit_event  # noqa: E402, F401
 from app.models import calendar_event as _calendar_event  # noqa: E402, F401
-from app.models import award as _award  # noqa: E402, F401
 from app.models import consultation as _consultation  # noqa: E402, F401
 from app.models import conversation as _conversation  # noqa: E402, F401
 from app.models import diagnosis as _diagnosis  # noqa: E402, F401
@@ -31,7 +30,6 @@ from app.models import education_policy as _education_policy  # noqa: E402, F401
 from app.models import email_verification_token as _email_verification_token  # noqa: E402, F401
 from app.models import password_reset_token as _password_reset_token  # noqa: E402, F401
 from app.models import plan_item as _plan_item  # noqa: E402, F401
-from app.models import reading_activity as _reading_activity  # noqa: E402, F401
 from app.models import recommendation as _recommendation  # noqa: E402, F401
 from app.models import recommendation_feedback as _recommendation_feedback  # noqa: E402, F401
 from app.models import refresh_token as _refresh_token  # noqa: E402, F401

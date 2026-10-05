@@ -11,6 +11,7 @@ def _clean_text(cell: str | None) -> str:
     # real line break in the source text).
     return re.sub(r"\s+", " ", cell or "").strip()
 
+
 _CATEGORY_MAP = {
     "동아리활동": ActivityCategory.CLUB,
     "진로활동": ActivityCategory.CAREER,
@@ -46,6 +47,7 @@ def parse_changche_blocks(tables: list[Table]) -> list[ChangcheBlock]:
         note_idx = next(i for i, c in enumerate(header) if "특기사항" in c)
 
         current_grade: int | None = None
+        current_area = ""
         for row in table[header_row_idx + 1 :]:
             cells = [_clean_text(cell) for cell in row]
             grade_cell = cells[0] if cells else ""
@@ -56,7 +58,14 @@ def parse_changche_blocks(tables: list[Table]) -> list[ChangcheBlock]:
 
             area = cells[area_idx] if area_idx < len(cells) else ""
             note = cells[note_idx] if note_idx < len(cells) else ""
-            if not note:
+            # 새 서식은 영역(동아리·진로 등)을 머리 행에 한 번만 적고, 특기사항은 그 아래
+            # 영역 칸이 빈 행에 온다 — 영역을 이어 받지 않으면 전부 자율활동이 된다.
+            if area:
+                current_area = area
+            else:
+                area = current_area
+            # "희망분야 | 값"은 특기사항 열에 들어 있어도 서술이 아니라 진로희망 항목이다.
+            if not note or note.replace(" ", "") == "희망분야":
                 continue
             if area == "봉사활동":
                 continue

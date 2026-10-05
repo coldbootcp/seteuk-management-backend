@@ -10,8 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.academic_performance import AcademicPerformance
 from app.models.activity import Activity
-from app.models.award import Award
-from app.models.reading_activity import ReadingActivity
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.diagnosis import (
     GradesTrend,
@@ -25,14 +23,12 @@ async def has_diagnosis_evidence(db: AsyncSession, user_id: uuid.UUID) -> bool:
     """정밀 진단이 근거로 삼을 과거 기록이 하나라도 있는지 확인한다.
 
     진로 희망이나 이름은 계획 상담의 출발점일 뿐, 과거 이력을 분석한 SWOT의 근거는
-    아니다. 이 다섯 영역이 모두 비어 있으면 LLM 호출을 건너뛰어, 빈 입력에 그럴듯한
+    아니다. 이 영역들이 모두 비어 있으면 LLM 호출을 건너뛰어, 빈 입력에 그럴듯한
     학년·활동·약점을 지어내는 일을 구조적으로 막는다.
     """
     for model in (
         AcademicPerformance,
-        ReadingActivity,
         Activity,
-        Award,
         VolunteerRecord,
     ):
         record_id = await db.scalar(
@@ -62,13 +58,12 @@ def serialize_row(row: Any) -> dict[str, Any]:
 
 @dataclass
 class SemesterGroup:
-    """학기별 평가 섹션의 입력. 성적/독서/활동만 담는다 — 출결·봉사는 학년
+    """학기별 평가 섹션의 입력. 성적/활동만 담는다 — 출결·봉사는 학년
     단위로만 존재해 학기 귀속이 애매하고, 진로 유기적 평가 섹션에서 따로 다룬다."""
 
     grade: int
     semester: int
     academic_performance: list[AcademicPerformance] = field(default_factory=list)
-    reading_activities: list[ReadingActivity] = field(default_factory=list)
     activities: list[Activity] = field(default_factory=list)
     # 자율활동·진로활동처럼 생기부가 학기를 나누지 않고 학년 단위로만 기록하는
     # 활동. 어느 학기의 것인지 알 수 없으므로 그 학년의 두 학기에 모두 근거로
@@ -78,7 +73,6 @@ class SemesterGroup:
     def to_prompt_json(self) -> dict[str, Any]:
         return {
             "academic_performance": [serialize_row(r) for r in self.academic_performance],
-            "reading_activities": [serialize_row(r) for r in self.reading_activities],
             "activities": [serialize_row(r) for r in self.activities],
             "year_activities": [serialize_row(r) for r in self.year_activities],
         }
@@ -88,13 +82,6 @@ async def get_semester_groups(db: AsyncSession, user_id: uuid.UUID) -> list[Seme
     academic = list(
         await db.scalars(select(AcademicPerformance).where(AcademicPerformance.user_id == user_id))
     )
-    reading = list(
-        await db.scalars(
-            select(ReadingActivity).where(
-                ReadingActivity.user_id == user_id, ReadingActivity.semester.is_not(None)
-            )
-        )
-    )
     activities = list(await db.scalars(select(Activity).where(Activity.user_id == user_id)))
     # 생기부의 자율활동·진로활동·행동특성은 학년 단위라 학기가 비어 있다. 예전에는
     # 이 행들을 아예 제외했는데, 그러면 학기 리뷰가 기록의 3분의 1을 못 보고
@@ -103,7 +90,7 @@ async def get_semester_groups(db: AsyncSession, user_id: uuid.UUID) -> list[Seme
     semester_activities = [r for r in activities if r.semester is not None]
     year_activities = [r for r in activities if r.semester is None]
 
-    all_rows = (*academic, *reading, *semester_activities)
+    all_rows = (*academic, *semester_activities)
     pairs: set[tuple[int, int]] = {(r.grade, r.semester) for r in all_rows}
     # 학기 활동이 하나도 없어도 학년 활동만 있는 학년이 있을 수 있다. 그 학년도
     # 리뷰 대상이 되도록 두 학기를 만들어 둔다.
@@ -117,9 +104,6 @@ async def get_semester_groups(db: AsyncSession, user_id: uuid.UUID) -> list[Seme
                 semester=semester,
                 academic_performance=[
                     r for r in academic if r.grade == grade and r.semester == semester
-                ],
-                reading_activities=[
-                    r for r in reading if r.grade == grade and r.semester == semester
                 ],
                 activities=[
                     r for r in semester_activities if r.grade == grade and r.semester == semester
@@ -137,16 +121,12 @@ async def get_domain_rows(db: AsyncSession, user_id: uuid.UUID) -> dict[str, lis
         select(AcademicPerformance).where(AcademicPerformance.user_id == user_id)
     )
     activities = await db.scalars(select(Activity).where(Activity.user_id == user_id))
-    awards = await db.scalars(select(Award).where(Award.user_id == user_id))
     volunteer = await db.scalars(select(VolunteerRecord).where(VolunteerRecord.user_id == user_id))
-    reading = await db.scalars(select(ReadingActivity).where(ReadingActivity.user_id == user_id))
 
     return {
         "성적": [serialize_row(r) for r in academic],
         "활동": [serialize_row(r) for r in activities],
-        "수상": [serialize_row(r) for r in awards],
         "봉사": [serialize_row(r) for r in volunteer],
-        "독서": [serialize_row(r) for r in reading],
     }
 
 
@@ -162,7 +142,7 @@ async def get_career_thread_material(
     db: AsyncSession, user_id: uuid.UUID
 ) -> CareerThreadMaterial:
     """진로 유기적 평가 섹션의 입력. 활동은 학기 유무와 무관하게 전부 넘기고,
-    수상/봉사도 후보 재료로 함께 준다 — 이 중 무엇을 갈래에 넣을지는 LLM이 진로
+    봉사도 후보 재료로 함께 준다 — 이 중 무엇을 갈래에 넣을지는 LLM이 진로
     관련성으로 판단한다.
 
     활동에는 그 호출 안에서만 유효한 정수 index를 붙인다. 어느 활동이 어느 갈래에
@@ -176,7 +156,6 @@ async def get_career_thread_material(
             .order_by(Activity.grade, Activity.semester.nullsfirst(), Activity.created_at)
         )
     )
-    awards = await db.scalars(select(Award).where(Award.user_id == user_id))
     volunteer = await db.scalars(select(VolunteerRecord).where(VolunteerRecord.user_id == user_id))
 
     index_of_activity = dict(enumerate(activities, start=1))
@@ -186,7 +165,6 @@ async def get_career_thread_material(
                 {"index": index, **serialize_row(activity)}
                 for index, activity in index_of_activity.items()
             ],
-            "awards": [serialize_row(r) for r in awards],
             "volunteer_records": [serialize_row(r) for r in volunteer],
         },
         index_of_activity=index_of_activity,
