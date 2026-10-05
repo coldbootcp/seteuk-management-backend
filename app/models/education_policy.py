@@ -31,7 +31,7 @@ class EducationPolicy(Base):
     curriculum_name: Mapped[str] = mapped_column(String(160), nullable=False)
     rank_grade_scale: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
-    # 과목 체계·학생부 기재·수능처럼 한 문장으로 축약하면 의미가 달라지는 기준을
+    # 과목 체계·생기부 기재·수능처럼 한 문장으로 축약하면 의미가 달라지는 기준을
     # 구조화해 둔다. 화면은 이 값을 "공식 기준"으로 표시하고, 임의 계산값으로
     # 바꾸지 않는다.
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
@@ -45,7 +45,7 @@ class EducationPolicy(Base):
 
 
 class AdmissionPolicyRule(Base):
-    """모집연도·지원 규칙처럼 학생부 등급과 별개인 대입 공통 기준.
+    """모집연도·지원 규칙처럼 생기부 등급과 별개인 대입 공통 기준.
 
     모든 대학에 동일한 결론을 낼 수 없는 규칙은 ``decision_scope``을
     ``track_specific``으로 저장한다. 이를 통해 "졸업생이면 무조건 가능" 같은

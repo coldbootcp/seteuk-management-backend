@@ -1,8 +1,10 @@
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
+import pymupdf
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +18,57 @@ from app.models.user import User
 from app.models.volunteer_record import VolunteerRecord
 from app.schemas.seteuk import ParseError, RecordReview, SeteukAnalysisResult
 from app.services import record_review
+from app.services.parser.extract import extract_text
 from app.services.parser.pipeline import parse_seteuk_pdf
 from app.services.parser.redact import redact_pdf
+from app.services.parser.sections import split_sections
+
+logger = logging.getLogger(__name__)
+
+_DOWNLOAD_HINT = "정부24나 나이스에서 생기부를 PDF 파일로 내려받아 올려 주세요."
+# 생기부라면 대개 이 구역들이 함께 있다. 셋 이상 보여야 생기부로 본다 — 아무 PDF나
+# 받아 "분석 완료, 기록 0건"으로 끝나면 학생은 무엇이 잘못됐는지 알 수 없다.
+_RECORD_SECTIONS = (
+    "인적사항",
+    "학적사항",
+    "출결상황",
+    "교과학습발달상황",
+    "창의적체험활동상황",
+    "행동특성 및 종합의견",
+)
+# 글자가 이보다 적으면 사진·스캔으로 만든 PDF로 본다. 사진 PDF는 대개 0자이고, 짧더라도
+# 글자가 있는 문서는 "생기부가 아님"으로 안내하는 편이 정확하다.
+_MIN_TEXT_CHARS = 30
+
+
+def _check_record_pdf(file_bytes: bytes) -> None:
+    """받자마자 원인별로 정확히 안내한다. 예전에는 암호·손상 파일이 "개인정보를 가리는 데
+    실패"로, 사진 PDF와 생기부가 아닌 PDF는 "분석 완료(0건)"로 끝나 학생이 원인을 알 수
+    없었다."""
+    if not file_bytes.startswith(b"%PDF"):
+        raise UnsupportedFileError(f"생기부 PDF 파일만 올릴 수 있습니다. {_DOWNLOAD_HINT}")
+    try:
+        document = pymupdf.open(stream=file_bytes, filetype="pdf")
+    except Exception as exc:
+        raise UnsupportedFileError(
+            f"PDF 파일을 열 수 없습니다. 파일이 손상됐을 수 있으니 {_DOWNLOAD_HINT}"
+        ) from exc
+    with document:
+        if document.needs_pass:
+            raise UnsupportedFileError(
+                "암호가 걸린 PDF는 열 수 없습니다. 암호를 해제한 PDF로 다시 저장해 올려 주세요."
+            )
+    text = extract_text(file_bytes)
+    if len(text.strip()) < _MIN_TEXT_CHARS:
+        raise UnsupportedFileError(
+            "PDF에서 글자를 읽을 수 없습니다. 사진을 찍거나 스캔해 만든 파일은 분석할 수 "
+            f"없습니다. {_DOWNLOAD_HINT}"
+        )
+    sections = split_sections(text)
+    if sum(1 for name in _RECORD_SECTIONS if sections.get(name, "").strip()) < 3:
+        raise UnsupportedFileError(
+            f"학교생활기록부(생기부)로 보이지 않는 파일입니다. {_DOWNLOAD_HINT}"
+        )
 
 
 async def create_upload(
@@ -31,8 +82,7 @@ async def create_upload(
     """업로드 원본을 계정에 보관한다(통합 결정 P-1). 예전 방침은 "PDF 원본은 저장하지
     않는다"였지만, 학생이 나중에 자기가 올린 파일을 다시 확인할 수 있어야 한다는
     판단으로 뒤집었다. 원본은 파싱 결과와 달리 진단·챗봇 컨텍스트에 절대 싣지 않는다."""
-    if not file_bytes.startswith(b"%PDF"):
-        raise UnsupportedFileError("텍스트 PDF만 지원합니다")
+    _check_record_pdf(file_bytes)
     # 보관하는 것은 개인정보를 지운 PDF뿐이다. 지우지 못하면 원본을 저장하지 않고 실패시킨다.
     try:
         stored_bytes, _ = redact_pdf(file_bytes)
@@ -358,9 +408,15 @@ async def run_parse_job(upload_id: uuid.UUID, pdf_bytes: bytes) -> None:
             upload.status = UploadStatus.DONE.value
             if replacing and user is not None:
                 await _review_replacement(db, upload, user, original, expected_period)
-        except Exception as exc:
+        except Exception:
+            # 내부 예외 문구("ValueError: ...")는 학생에게 보이는 실패 사유로 쓰지 않는다.
+            # 원인은 로그에 남기고, 화면에는 다음에 할 일을 안내한다.
+            logger.exception("seteuk parse failed: upload_id=%s", upload.id)
             upload.status = UploadStatus.FAILED.value
-            upload.failure_reason = f"{type(exc).__name__}: {exc}"
+            upload.failure_reason = (
+                "생기부를 분석하는 중에 문제가 생겼습니다. 잠시 후 다시 올려 주세요. "
+                "같은 문제가 반복되면 운영팀에 알려 주세요."
+            )
 
         await db.commit()
 

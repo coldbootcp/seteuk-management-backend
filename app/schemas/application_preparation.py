@@ -1,4 +1,4 @@
-"""지원처별 학생부·면접 준비 API. 활동 근거는 서버가 소유한 목록으로 검증한다."""
+"""지원처별 생기부·면접 준비 API. 활동 근거는 서버가 소유한 목록으로 검증한다."""
 
 import uuid
 from datetime import datetime

@@ -36,7 +36,7 @@ _STAGE_NAMES = NARRATIVE_STAGE_NAMES
 # 지나간 학기 자리 — 흐름 초안에는 모델이 쓰지 않고 서버가 채운다. 확정 시
 # _apply_full_replan이 어차피 회고 마디로 덮어쓰므로 여기서는 형태만 맞춘다.
 _PAST_PLACEHOLDER_TITLE = "지금까지의 기록"
-_PAST_PLACEHOLDER_OBJECTIVE = "실제 학생부 기록으로 확인하는 지나간 학기입니다."
+_PAST_PLACEHOLDER_OBJECTIVE = "실제 생기부 기록으로 확인하는 지나간 학기입니다."
 
 
 def _reset_after_flow_change(session: ConsultationSession) -> None:
@@ -324,7 +324,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "type": "string",
                 "description": (
                     "지나간 학기의 실제 기록에서 읽은 출발점 1~2문장. 기록이 없거나 "
-                    "학생부가 반영되지 않았으면 빈 문자열."
+                    "생기부가 반영되지 않았으면 빈 문자열."
                 ),
             },
             "nodes": {"type": "array", "items": _FLOW_NODE_SCHEMA},

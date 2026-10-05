@@ -43,7 +43,7 @@ def _engineering_cards(program_name: str, track_name: str) -> list[ResearchCard]
             source_url=SNU_ENGINEERING_VISION_URL,
         ),
         ResearchCard(
-            title="학생부에서 연결해 볼 역량",
+            title="생기부에서 연결해 볼 역량",
             description="공식 평가기준과 공대 인재상을 학생 기록에 연결한 서비스의 해석입니다. 활동을 새로 만들라는 뜻이 아니라, 이미 한 활동에서 어떤 근거를 꺼낼지 정리하는 기준입니다.",
             items=[
                 "수월: 어려운 교과 개념을 스스로 확장하고, 자료·계산·실험의 한계를 점검한 흔적",
@@ -61,7 +61,7 @@ def _engineering_cards(program_name: str, track_name: str) -> list[ResearchCard]
             description=f"{program_name} 지원자는 일반적인 ‘공학 관심’보다 학과와 연결되는 교과 기반 설명을 준비하는 편이 좋습니다.",
             items=[
                 "수학(자연) 제시문에서 사용한 개념·풀이 전략·검산 과정을 말로 설명하는 연습",
-                "학생부의 탐구·프로젝트를 문제 인식 → 방법 선택 → 결과 해석 → 한계와 다음 질문 순서로 정리",
+                "생기부의 탐구·프로젝트를 문제 인식 → 방법 선택 → 결과 해석 → 한계와 다음 질문 순서로 정리",
                 "활동마다 이 학과를 택한 이유를 억지로 덧붙이지 말고, 실제 관심이 깊어진 계기를 분명히 기록",
             ],
             source_label="2027학년도 서울대 수시 일반전형 면접·구술고사 안내",
@@ -104,7 +104,7 @@ def get_admission_research(
     return [
         ResearchCard(
             title="서울대 학생부종합전형이 보는 과정",
-            description="서울대는 학생부를 바탕으로 학업역량뿐 아니라 학업에 대한 노력과 의지, 성장 가능성을 종합적으로 평가한다고 안내합니다.",
+            description="서울대는 생기부를 바탕으로 학업역량뿐 아니라 학업에 대한 노력과 의지, 성장 가능성을 종합적으로 평가한다고 안내합니다.",
             items=[
                 "과목 선택과 학습 과정에서 드러나는 주도성",
                 "관심을 질문·탐구·성찰로 발전시킨 흐름",

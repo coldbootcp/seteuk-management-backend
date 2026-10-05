@@ -111,7 +111,7 @@ def test_filter_removes_premature_draft_confirmation_claim() -> None:
 
 
 def test_filter_does_not_claim_missing_activities_while_school_record_pending() -> None:
-    """학생부 PDF는 있지만 처리가 아직 안 끝난 상태(processing/failed/
+    """생기부 PDF는 있지만 처리가 아직 안 끝난 상태(processing/failed/
     awaiting_import)에서는 "아직 반영되지 않았다"는 안내문을 붙인다 — 실제로
     처리 중인 일이라 정확한 표현이다."""
     result = filter_consultation_output_for_period(

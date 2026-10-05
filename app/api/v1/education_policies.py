@@ -38,7 +38,7 @@ async def resolve_my_education_policy(
             policy=None,
             admission_rules=[AdmissionPolicyRuleRead.model_validate(rule) for rule in rules],
             needs_freshman_academic_year=True,
-            message="입학 연도를 확인하면 성적·학생부·대입 기준을 해당 학생에게 맞춰 적용합니다.",
+            message="입학 연도를 확인하면 성적·생기부·대입 기준을 해당 학생에게 맞춰 적용합니다.",
         )
     if policy is None:
         return EducationPolicyResolutionRead(

@@ -106,7 +106,7 @@ async def test_catalog_returns_latest_guide_and_exact_program_profile(client, au
             sections=[
                 {
                     "title": "입시가이드",
-                    "paragraphs": ["학생부를 종합 평가합니다."],
+                    "paragraphs": ["생기부를 종합 평가합니다."],
                     "tables": [{"rows": [["구분", "반영방법"], ["서류", "100"]]}],
                 }
             ],

@@ -15,7 +15,7 @@ async def _seed_policies() -> None:
             rank_grade_scale=9,
             summary="9등급제",
             details={"grade_system": "석차등급 9등급 산출"},
-            source_label="공식 학생부 기준",
+            source_label="공식 생기부 기준",
             source_url="https://example.edu/policy-2015",
             verified_at=datetime.now(UTC),
         )
@@ -28,7 +28,7 @@ async def _seed_policies() -> None:
             rank_grade_scale=5,
             summary="5등급제",
             details={"grade_system": "석차등급 5등급 산출"},
-            source_label="공식 학생부 기준",
+            source_label="공식 생기부 기준",
             source_url="https://example.edu/policy-2022",
             verified_at=datetime.now(UTC),
         )
@@ -44,7 +44,7 @@ async def _seed_policies() -> None:
                     title="석차등급 5등급제",
                     summary="5등급제",
                     action_required=None,
-                    source_label="공식 학생부 기준",
+                    source_label="공식 생기부 기준",
                     source_url="https://example.edu/rank",
                     verified_at=datetime.now(UTC),
                 ),
