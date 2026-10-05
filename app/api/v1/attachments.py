@@ -58,6 +58,22 @@ async def upload_attachment(
     return _to_read(attachment)
 
 
+# /activities/attachments는 기록 라우터의 /activities/{record_id}에 먼저 걸리므로 따로 둔다.
+all_attachments_router = APIRouter(
+    prefix="/attachments", tags=["attachments"], dependencies=[Depends(get_active_verified_user)]
+)
+
+
+@all_attachments_router.get("", response_model=list[AttachmentRead])
+async def list_all_attachments(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[AttachmentRead]:
+    """학생의 첨부파일 전부. 화면은 이것 하나로 활동별 첨부를 나눠 그린다."""
+    rows = await attachment_service.list_all_attachments(db, user.id)
+    return [_to_read(row) for row in rows]
+
+
 @router.get("/{activity_id}/attachments", response_model=list[AttachmentRead])
 async def list_attachments(
     activity_id: uuid.UUID,

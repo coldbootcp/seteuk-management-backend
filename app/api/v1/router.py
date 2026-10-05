@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.account import router as account_router
 from app.api.v1.admission_catalog import router as admission_catalog_router
 from app.api.v1.application_preparations import router as application_preparations_router
+from app.api.v1.attachments import all_attachments_router
 from app.api.v1.attachments import router as attachments_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.consultation import router as consultation_router
@@ -33,6 +34,7 @@ api_router.include_router(consultation_router)
 for record_router in record_routers:
     api_router.include_router(record_router)
 api_router.include_router(attachments_router)
+api_router.include_router(all_attachments_router)
 api_router.include_router(plans_router)
 api_router.include_router(roadmaps_router)
 api_router.include_router(recommendations_router)
