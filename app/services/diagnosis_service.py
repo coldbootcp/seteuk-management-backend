@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from sqlalchemy import select
@@ -9,6 +10,8 @@ from app.models.diagnosis import Diagnosis, DiagnosisStatus
 from app.schemas.diagnosis import DiagnosisResult, PreQuestion, PreQuestionAnswer
 from app.services.diagnosis import pipeline
 from app.services.student_interest_service import get_current_interests, upsert_interest
+
+logger = logging.getLogger(__name__)
 
 
 async def has_completed_diagnosis_before(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -76,9 +79,13 @@ async def run_diagnosis_job(diagnosis_id: uuid.UUID, user_id: uuid.UUID) -> None
             diagnosis.threats = overall.threats
             diagnosis.headline_comment = overall.headline_comment
             diagnosis.status = DiagnosisStatus.DONE.value
-        except Exception as exc:
+        except Exception:
+            # 내부 예외 문구는 학생에게 보이는 실패 사유로 쓰지 않는다 — 원인은 로그로.
+            logger.exception("diagnosis failed: diagnosis_id=%s", diagnosis.id)
             diagnosis.status = DiagnosisStatus.FAILED.value
-            diagnosis.failure_reason = f"{type(exc).__name__}: {exc}"
+            diagnosis.failure_reason = (
+                "진단을 만드는 중에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요."
+            )
 
         await db.commit()
 

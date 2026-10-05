@@ -43,6 +43,20 @@ def _passthrough_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _shallow_record_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """같은 이유로, 생기부 파일 검사는 "PDF로 시작하는가"만 본다. 원인별 안내(암호·손상·
+    사진 PDF·생기부 아님)는 tests/unit/test_record_pdf_check.py가 진짜 PDF로 검증한다."""
+    from app.core.exceptions import UnsupportedFileError
+    from app.services import seteuk_service
+
+    def _check(data: bytes) -> None:
+        if not data.startswith(b"%PDF"):
+            raise UnsupportedFileError("생기부 PDF 파일만 올릴 수 있습니다.")
+
+    monkeypatch.setattr(seteuk_service, "_check_record_pdf", _check)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_email(monkeypatch: pytest.MonkeyPatch) -> None:
     """.env에 RESEND_API_KEY가 있으면 가입 테스트마다 가짜 주소로 실제 메일이 나가고,
     Resend 응답이 늦으면 전혀 무관한 테스트가 ReadTimeout으로 실패한다. 발송 경계를
