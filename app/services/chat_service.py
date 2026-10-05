@@ -552,7 +552,17 @@ def _merge_tool_call_deltas(
     요청에서 그 호출을 되돌려 보낼 때 그대로 실어 주지 않으면 400으로 거부한다. 그래서
     받은 그대로 보관했다가 `_assistant_tool_calls`가 다시 싣는다."""
     for delta in deltas:
-        slot = accumulator.setdefault(delta.index, {"id": "", "name": "", "arguments": ""})
+        index = delta.index
+        if index is None:
+            # Gemini는 index를 주지 않는다(None). 그대로 묶으면 한 답변의 도구 호출 여러
+            # 개가 한 칸으로 합쳐져 인자가 "{...}{}"가 되고, 해석에 실패해 상담이 멈췄다.
+            # id나 이름이 오면 새 호출로, 아니면 직전 호출의 이어지는 조각으로 본다.
+            starts_new = bool(delta.id) or bool(delta.function is not None and delta.function.name)
+            if starts_new or not accumulator:
+                index = len(accumulator)
+            else:
+                index = max(accumulator)
+        slot = accumulator.setdefault(index, {"id": "", "name": "", "arguments": ""})
         if delta.id:
             slot["id"] = delta.id
         extra = getattr(delta, "extra_content", None)
