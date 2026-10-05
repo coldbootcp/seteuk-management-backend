@@ -108,6 +108,37 @@ async def test_attachment_round_trip(client: AsyncClient, auth_headers: dict[str
     ).json() == []
 
 
+async def test_all_attachments_come_in_one_request(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """작업공간은 활동마다 묻지 않고 한 번에 받는다. 남의 첨부는 섞이지 않는다."""
+    signup = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": "other-bulk@example.com", "password": "s3cure-passw0rd"},
+    )
+    other_auth_headers = {"Authorization": f"Bearer {signup.json()['access_token']}"}
+    first = await _new_activity(client, auth_headers)
+    second = await _new_activity(client, auth_headers)
+    for activity_id in (first, second):
+        await client.post(
+            f"/api/v1/activities/{activity_id}/attachments",
+            headers=auth_headers,
+            files={"file": ("안내문.pdf", PDF_BYTES, "application/pdf")},
+        )
+    theirs = await _new_activity(client, other_auth_headers)
+    await client.post(
+        f"/api/v1/activities/{theirs}/attachments",
+        headers=other_auth_headers,
+        files={"file": ("남의것.pdf", PDF_BYTES, "application/pdf")},
+    )
+
+    listed = await client.get("/api/v1/attachments", headers=auth_headers)
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert sorted(row["activity_id"] for row in rows) == sorted([first, second])
+    assert all("content" not in row for row in rows)
+
+
 async def test_attachment_rejects_disallowed_file_types(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:

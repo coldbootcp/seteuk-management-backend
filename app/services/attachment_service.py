@@ -11,6 +11,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.core.exceptions import RecordNotFoundError, UnsupportedFileError
 from app.models.activity import Activity
@@ -104,6 +105,19 @@ async def create_attachment(
     await db.commit()
     await db.refresh(attachment)
     return attachment
+
+
+async def list_all_attachments(db: AsyncSession, user_id: uuid.UUID) -> list[ActivityAttachment]:
+    """학생의 첨부파일 전부(본문 제외). 작업공간을 열 때 활동마다 따로 묻던 것을 한 번으로
+    줄인다 — 활동이 100건을 넘는 학생은 요청 100여 개가 한꺼번에 몰려 DB 연결을 다 잡아
+    먹고 운영에서 30초씩 걸렸다. 파일 본문(content)은 목록에 필요 없어 읽지 않는다."""
+    rows = await db.scalars(
+        select(ActivityAttachment)
+        .options(defer(ActivityAttachment.content))
+        .where(ActivityAttachment.user_id == user_id)
+        .order_by(ActivityAttachment.created_at.asc())
+    )
+    return list(rows)
 
 
 async def list_attachments(
