@@ -4,8 +4,9 @@
 생성할 뿐이고, 어떤 학생 정보를 가져올지·어떤 규칙을 적용할지·무엇을 탈락시킬지는
 하네스가 정한다. 그래야 프로바이더를 바꿔도 메모리와 평가 로직이 그대로 남는다.
 
-지금 실제로 쓰는 것은 DeepSeek 하나다(`LLM_PROVIDER` 기본값). 다른 프로바이더를
-붙이려면 이 파일에 클래스를 하나 더하고 `_PROVIDERS`에 등록하면 되며, 호출부는
+`LLM_PROVIDER`로 고른다: `gemini`(Google Gemini, 운영) 또는 `deepseek`. 둘 다 OpenAI
+호환 API라 `OpenAICompatibleProvider` 하나로 돌고, 업체별로 주소·키·모델만 다르다.
+다른 프로바이더를 붙이려면 클래스를 하나 더하고 `_PROVIDERS`에 등록하면 되며, 호출부는
 바뀌지 않는다.
 """
 
@@ -36,17 +37,20 @@ class LLMProvider(Protocol):
         ...
 
 
-class DeepSeekProvider:
-    """OpenAI 호환 API를 쓰는 DeepSeek.
+class OpenAICompatibleProvider:
+    """OpenAI 호환 Chat Completions API를 쓰는 프로바이더의 공통 구현.
 
     `max_retries=0`인 이유는 재시도 정책이 프로바이더가 아니라 하네스의 몫이기
     때문이다 — 파서는 블록 단위로 실패를 흡수하고, 구조화 호출은 3회 재시도하며,
     스트리밍은 아예 재시도하지 않는다(토큰을 일부 내보낸 뒤에는 되돌릴 수 없다).
     """
 
-    name = "deepseek"
+    name = ""
 
-    def __init__(self) -> None:
+    def __init__(self, *, api_key: str | None, base_url: str, model: str) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
+        self.model = model
         # 생기부 파싱은 블록을 15개까지 동시에 호출한다. 호출마다 클라이언트를 새로
         # 만들면 커넥션 풀을 공유하지 못하므로 인스턴스마다 하나만 만들어 재사용한다.
         self._cached: AsyncOpenAI | None = None
@@ -54,8 +58,8 @@ class DeepSeekProvider:
     def _client(self) -> AsyncOpenAI:
         if self._cached is None:
             self._cached = AsyncOpenAI(
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url,
+                api_key=self._api_key,
+                base_url=self._base_url,
                 max_retries=0,
                 # SDK 기본 connect 타임아웃(5초)은 블록 15개를 동시에 여는 파싱에서
                 # 실제로 걸렸다 — 응답이 느린 게 아니라 연결을 맺지 못해 블록이
@@ -69,7 +73,7 @@ class DeepSeekProvider:
 
     async def complete_json(self, system_prompt: str, user_content: str) -> str:
         response = await self._client().chat.completions.create(
-            model=settings.deepseek_model,
+            model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -82,7 +86,7 @@ class DeepSeekProvider:
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
     ) -> AsyncIterator[Any]:
         kwargs: dict[str, Any] = {
-            "model": settings.deepseek_model,
+            "model": self.model,
             "messages": messages,
             "stream": True,
         }
@@ -94,7 +98,31 @@ class DeepSeekProvider:
             yield chunk
 
 
-_PROVIDERS: dict[str, type] = {"deepseek": DeepSeekProvider}
+class DeepSeekProvider(OpenAICompatibleProvider):
+    name = "deepseek"
+
+    def __init__(self) -> None:
+        super().__init__(
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+            model=settings.deepseek_model,
+        )
+
+
+class GeminiProvider(OpenAICompatibleProvider):
+    """Google Gemini — OpenAI 호환 엔드포인트로 부른다."""
+
+    name = "gemini"
+
+    def __init__(self) -> None:
+        super().__init__(
+            api_key=settings.gemini_api_key,
+            base_url=settings.gemini_base_url,
+            model=settings.gemini_model,
+        )
+
+
+_PROVIDERS: dict[str, type] = {"deepseek": DeepSeekProvider, "gemini": GeminiProvider}
 
 
 def get_provider() -> LLMProvider:

@@ -78,12 +78,15 @@ class Settings(BaseSettings):
     # processing 상태로 이 시간을 넘긴 job은 프로세스가 죽은 것으로 보고 실패 처리한다.
     stale_job_timeout_minutes: int = 30
 
-    # 모델 프로바이더는 하네스 경계 뒤에 있다(P-3). 지금 붙어 있는 것은
-    # DeepSeek 하나지만, 호출부를 바꾸지 않고 교체할 수 있어야 한다.
+    # 모델 프로바이더는 하네스 경계 뒤에 있다(P-3, app/services/llm/provider.py).
+    # "gemini" 또는 "deepseek". 호출부를 바꾸지 않고 교체한다.
     llm_provider: str = "deepseek"
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    gemini_api_key: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    gemini_model: str = "gemini-2.5-flash"
     seteuk_llm_concurrency: int = 15
     # 모델 호출 타임아웃(초). SDK 기본값은 connect 5초인데, 파싱은 블록 15개를
     # 동시에 열기 때문에 그 5초에 걸려 멀쩡한 블록이 통째로 버려지는 일이 있었다.

@@ -546,16 +546,41 @@ def _merge_tool_call_deltas(
     accumulator: dict[int, dict[str, Any]], deltas: list[Any]
 ) -> None:
     """OpenAI 호환 스트림은 도구 호출을 index별 조각으로 흘려보낸다 — 이름은 보통
-    첫 조각에만, 인자는 여러 조각에 걸쳐 나뉘어 온다."""
+    첫 조각에만, 인자는 여러 조각에 걸쳐 나뉘어 온다.
+
+    Gemini는 도구 호출에 `extra_content`(생각 서명, thought_signature)를 붙이고, 다음
+    요청에서 그 호출을 되돌려 보낼 때 그대로 실어 주지 않으면 400으로 거부한다. 그래서
+    받은 그대로 보관했다가 `_assistant_tool_calls`가 다시 싣는다."""
     for delta in deltas:
         slot = accumulator.setdefault(delta.index, {"id": "", "name": "", "arguments": ""})
         if delta.id:
             slot["id"] = delta.id
+        extra = getattr(delta, "extra_content", None)
+        if extra is None and getattr(delta, "model_extra", None):
+            extra = delta.model_extra.get("extra_content")
+        if extra:
+            slot["extra_content"] = extra
         if delta.function is not None:
             if delta.function.name:
                 slot["name"] = delta.function.name
             if delta.function.arguments:
                 slot["arguments"] += delta.function.arguments
+
+
+def _assistant_tool_calls(tool_calls: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    """모델에게 되돌려 보낼 assistant 메시지의 tool_calls. 프로바이더가 준 부가 정보
+    (Gemini의 생각 서명)가 있으면 그대로 싣는다."""
+    calls = []
+    for call in tool_calls.values():
+        item: dict[str, Any] = {
+            "id": call["id"],
+            "type": "function",
+            "function": {"name": call["name"], "arguments": call["arguments"] or "{}"},
+        }
+        if call.get("extra_content"):
+            item["extra_content"] = call["extra_content"]
+        calls.append(item)
+    return calls
 
 
 async def stream_reply(
@@ -645,17 +670,7 @@ async def stream_reply(
                     {
                         "role": "assistant",
                         "content": "".join(round_text) or None,
-                        "tool_calls": [
-                            {
-                                "id": call["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": call["name"],
-                                    "arguments": call["arguments"] or "{}",
-                                },
-                            }
-                            for call in tool_calls.values()
-                        ],
+                        "tool_calls": _assistant_tool_calls(tool_calls),
                     }
                 )
 
@@ -1116,17 +1131,7 @@ async def stream_consultation_reply(
                         # 모델의 다음 도구 호출 문맥은 원문을 보존한다. 화면·저장용
                         # 문장만 학기 규칙 필터를 거친다.
                         "content": raw_text or None,
-                        "tool_calls": [
-                            {
-                                "id": call["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": call["name"],
-                                    "arguments": call["arguments"] or "{}",
-                                },
-                            }
-                            for call in tool_calls.values()
-                        ],
+                        "tool_calls": _assistant_tool_calls(tool_calls),
                     }
                 )
 
