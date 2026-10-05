@@ -40,5 +40,6 @@ from app.models import seteuk_upload as _seteuk_upload  # noqa: E402, F401
 from app.models import student_interest as _student_interest  # noqa: E402, F401
 from app.models import timetable as _timetable  # noqa: E402, F401
 from app.models import usage_event as _usage_event  # noqa: E402, F401
+from app.models import waitlist_entry as _waitlist_entry  # noqa: E402, F401
 from app.models import user as _user  # noqa: E402, F401
 from app.models import volunteer_record as _volunteer_record  # noqa: E402, F401
