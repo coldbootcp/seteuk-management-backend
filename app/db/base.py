@@ -27,6 +27,7 @@ from app.models import consultation as _consultation  # noqa: E402, F401
 from app.models import conversation as _conversation  # noqa: E402, F401
 from app.models import diagnosis as _diagnosis  # noqa: E402, F401
 from app.models import education_policy as _education_policy  # noqa: E402, F401
+from app.models import llm_usage_event as _llm_usage_event  # noqa: E402, F401
 from app.models import email_verification_token as _email_verification_token  # noqa: E402, F401
 from app.models import password_reset_token as _password_reset_token  # noqa: E402, F401
 from app.models import plan_item as _plan_item  # noqa: E402, F401
