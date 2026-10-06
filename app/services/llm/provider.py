@@ -17,6 +17,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
+from app.services.llm.usage import record_usage
 
 settings = get_settings()
 
@@ -80,6 +81,7 @@ class OpenAICompatibleProvider:
             ],
             response_format={"type": "json_object"},
         )
+        await record_usage(self.name, self.model, "json", response.usage)
         return response.choices[0].message.content or ""
 
     async def stream(
@@ -89,13 +91,22 @@ class OpenAICompatibleProvider:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            # 사용량을 받으려면 켜야 한다. Gemini는 응답 조각에 붙여 주고, DeepSeek은
+            # choices가 빈 마지막 조각으로 따로 보낸다 — 그 조각은 호출부에 넘기지 않는다.
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
         stream = await self._client().chat.completions.create(**kwargs)
+        last_usage = None
         async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                last_usage = chunk.usage
+            if not chunk.choices:
+                continue
             yield chunk
+        await record_usage(self.name, self.model, "stream", last_usage)
 
 
 class DeepSeekProvider(OpenAICompatibleProvider):
